@@ -40,7 +40,7 @@ export class MuseAdapter {
     return this.bridge.store.renew(body?.event_id, body?.lease_token, integer(body?.lease_ms ?? 1800000, 1000, 3600000, 'lease_ms'));
   }
   checkpoint(body) {
-    if (!body || typeof body.event_id !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(body.step ?? '') || !['started', 'completed'].includes(body.phase)) fail('invalid_checkpoint', 'event_id, step and phase=started/completed are required.');
+    if (!body || typeof body.event_id !== 'string' || typeof body.step !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(body.step) || !['started', 'completed'].includes(body.phase)) fail('invalid_checkpoint', 'event_id, step and phase=started/completed are required.');
     if (Buffer.byteLength(JSON.stringify(body.result ?? null)) > 16384) fail('checkpoint_too_large', 'Checkpoint result must be at most 16 KiB.', 413);
     this.bridge.resources.check(Buffer.byteLength(JSON.stringify(body)) + 4096);
     if (!this.bridge.store.steps(body.event_id).some((entry) => entry.step === body.step) && this.bridge.store.steps(body.event_id).length >= 1024) fail('checkpoint_capacity', 'At most 1024 recorded steps per task.', 413);
@@ -71,7 +71,7 @@ export class MuseAdapter {
       to: event.from_wxid, text: body.text, request_id: requestId,
       ...(body.media !== undefined ? { media: body.media } : {}),
       ...(body.model_ready_at !== undefined ? { model_ready_at: body.model_ready_at } : {}),
-    }, { eventId: body.event_id });
+    }, { eventId: body.event_id, leaseToken: body.lease_token });
     // A timeout, rejected reply or uncertain outcome never reaches this ack.
     if (mode === 'final') this.bridge.store.ack([body.event_id]);
     return { ...result, event_id: body.event_id, mode, event_completed: mode === 'final' || row.acked_ms !== null };

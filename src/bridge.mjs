@@ -68,7 +68,7 @@ export class Bridge {
 
   // The response is only successful after WeChat has accepted every chunk.
   // No timer, scheduled flush, receive-loop wait, or process-per-chunk execution.
-  send(body, { eventId = null } = {}) {
+  send(body, { eventId = null, leaseToken } = {}) {
     body = this.validateSend(body);
     // Preserve v0.2 text fingerprints. Media IDs bind the supplied paths to the
     // first prepared snapshots; retries never substitute changed file bytes.
@@ -98,7 +98,7 @@ export class Bridge {
     const began = performance.now();
     const submittedAt = Date.now();
     const previous = this.peerTails.get(body.to) ?? Promise.resolve();
-    const work = previous.catch(() => {}).then(() => this.deliver(body, chunks, began, submittedAt));
+    const work = previous.catch(() => {}).then(() => this.deliver(body, chunks, began, submittedAt, eventId, leaseToken));
     this.peerTails.set(body.to, work);
     this.inflight.set(body.request_id, work);
     this.peerCounts.set(body.to, (this.peerCounts.get(body.to) ?? 0) + 1);
@@ -112,7 +112,7 @@ export class Bridge {
     return work;
   }
 
-  async deliver(body, chunks, began, submittedAt) {
+  async deliver(body, chunks, began, submittedAt, eventId, leaseToken) {
     const queueMs = performance.now() - began;
     let firstChunkMs = null;
     let upstreamMs = 0;
@@ -140,6 +140,13 @@ export class Bridge {
       this.log('send_failed', result);
       throw new BridgeError(code, error instanceof BridgeError ? error.message : 'Sending failed; inspect request status before retrying.', error.status ?? 502, result);
     };
+    const checkLease = () => {
+      if (eventId && this.config.require_lease_token !== false) {
+        try { this.store.requireLease(eventId, leaseToken); }
+        catch (error) { failDelivery(error, 'lease'); }
+      }
+    };
+    checkLease();
     if (parts.some((part) => ['unknown', 'sending'].includes(part.state))) {
       const result = { ok: false, request_id: body.request_id, state: 'unknown', retryable: false, accepted_chunks: accepted, total_chunks: chunks.length, timing: timing() };
       this.store.finish(body.request_id, 'unknown', result);
@@ -161,6 +168,7 @@ export class Bridge {
     prepareMs = body.media.length ? performance.now() - preparing : 0;
     for (const part of parts) {
       if (part.state === 'accepted') continue;
+      checkLease();
       if (this.store.get('expired', false)) failDelivery(new BridgeError('session_expired', '微信登录已过期，请重新扫码。', 401), 'send', part);
       const chunk = chunks[part.part];
       let record;
@@ -181,6 +189,9 @@ export class Bridge {
         }
       }
       const started = performance.now();
+      // Uploads and a recipient's earlier replies can outlive the task lease.
+      // Fence the old worker again immediately before each chat submission.
+      checkLease();
       this.store.partState(body.request_id, part.part, 'sending');
       try {
         if (chunk.type === 'text') await this.ilink.sendText(this.store.get('session'), body.to, chunk.text, this.store.context(body.to), part.client_id);
@@ -296,8 +307,10 @@ export class Bridge {
     const deadline = Date.now() + wait;
     for (;;) {
       if (this.stopping) fail('unavailable', 'Service is draining.', 503);
+      // A disconnected waiter must not take work away from a live worker.
+      if (signal?.aborted) return [];
       const events = this.store.claim(limit, lease);
-      if (events.length || Date.now() >= deadline || signal?.aborted) return events;
+      if (events.length || Date.now() >= deadline) return events;
       await new Promise((resolve) => {
         const done = () => { clearTimeout(timer); this.events.off('new', done); signal?.removeEventListener('abort', done); resolve(); };
         const timer = setTimeout(done, Math.min(250, deadline - Date.now()));

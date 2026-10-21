@@ -4,7 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { fail, integer } from './errors.mjs';
 
-export const VERSION = '0.4.0-rc.1';
+export const VERSION = '0.4.0-rc.2';
 export const OPS_DEFAULTS = Object.freeze({
   max_inflight_sends: 64, max_peer_sends: 16, max_pending_events: 2000,
   min_free_bytes: 128 * 1024 * 1024, max_state_bytes: 1024 * 1024 * 1024,
@@ -50,7 +50,7 @@ export function loadConfig(path = defaultConfigPath()) {
   if (!/^[a-z0-9_-]{1,32}$/.test(config.binding)) fail('invalid_config', 'Invalid binding.');
   if (!['127.0.0.1', '::1'].includes(config.listen?.host)) fail('invalid_config', 'listen.host must be loopback.');
   integer(config.listen.port, 1, 65535, 'listen.port');
-  if (typeof config.api_token !== 'string' || config.api_token.length < 32) fail('invalid_config', 'api_token must contain at least 32 characters.');
+  if (typeof config.api_token !== 'string' || !/^[\x21-\x7e]{32,256}$/.test(config.api_token)) fail('invalid_config', 'api_token must contain 32..256 printable ASCII characters without spaces. Run muse-link init to generate a private token.');
   if (!Array.isArray(config.allow_wxids) || config.allow_wxids.some((id) => typeof id !== 'string' || !id)) fail('invalid_config', 'Invalid allow_wxids.');
   integer(config.send_timeout_ms, 100, 120000, 'send_timeout_ms');
   integer(config.poll_timeout_ms, 1000, 120000, 'poll_timeout_ms');
@@ -62,7 +62,7 @@ export function loadConfig(path = defaultConfigPath()) {
   config.require_lease_token ??= true;
   if (typeof config.require_lease_token !== 'boolean') fail('invalid_config', 'require_lease_token must be boolean.');
   if (config.operations !== undefined && (!config.operations || typeof config.operations !== 'object' || Array.isArray(config.operations))) fail('invalid_config', 'operations must be an object.');
-  for (const key of Object.keys(config.operations ?? {})) if (!(key in OPS_DEFAULTS)) fail('invalid_config', `Unknown operations option: ${key}`);
+  for (const key of Object.keys(config.operations ?? {})) if (!Object.hasOwn(OPS_DEFAULTS, key)) fail('invalid_config', `Unknown operations option: ${key}`);
   config.operations = operational(config);
   for (const [key, value] of Object.entries(config.operations)) integer(value, 1, Number.MAX_SAFE_INTEGER, `operations.${key}`);
   if (config.operations.event_retention_days > config.operations.send_retention_days) fail('invalid_config', 'send retention must cover event retention.');

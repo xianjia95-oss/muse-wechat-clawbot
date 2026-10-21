@@ -41,7 +41,16 @@ export async function maintain(bridge, now = Date.now()) {
     const pruned = store.transaction(() => {
       const events = store.db.prepare("SELECT id FROM events e WHERE acked_ms IS NOT NULL AND acked_ms<? AND NOT EXISTS(SELECT 1 FROM task_steps t WHERE t.event_id=e.id AND t.state='started') LIMIT 500").all(now - policy.event_retention_days * day);
       for (const { id } of events) { store.db.prepare('DELETE FROM task_steps WHERE event_id=?').run(id); store.db.prepare('DELETE FROM events WHERE id=?').run(id); }
-      const sends = store.db.prepare("SELECT id FROM sends s WHERE created_ms<? AND (state IN ('accepted','rejected','failed') OR (state='unknown' AND json_extract(result,'$.reviewed')=1)) AND NOT EXISTS(SELECT 1 FROM events e JOIN send_events x ON x.event_id=e.id WHERE x.request_id=s.id AND e.acked_ms IS NULL) AND NOT EXISTS(SELECT 1 FROM media_jobs m WHERE m.request_id=s.id) LIMIT 500").all(now - policy.send_retention_days * day);
+      // v0.3 replies have no event relation, and progress IDs are irreversible
+      // hashes. Keep them while any task is pending so recovery can see the
+      // prior receipt instead of executing the task or sending it again.
+      const sends = store.db.prepare(`SELECT id FROM sends s WHERE created_ms<?
+        AND (state IN ('accepted','rejected','failed') OR (state='unknown' AND json_extract(result,'$.reviewed')=1))
+        AND NOT EXISTS(SELECT 1 FROM events e JOIN send_events x ON x.event_id=e.id WHERE x.request_id=s.id AND e.acked_ms IS NULL)
+        AND NOT (s.id GLOB 'muse-*' AND NOT EXISTS(SELECT 1 FROM send_events x WHERE x.request_id=s.id)
+          AND EXISTS(SELECT 1 FROM events e WHERE e.acked_ms IS NULL))
+        AND NOT EXISTS(SELECT 1 FROM media_jobs m WHERE m.request_id=s.id)
+        ORDER BY created_ms,id LIMIT 500`).all(now - policy.send_retention_days * day);
       for (const { id } of sends) { store.db.prepare('DELETE FROM parts WHERE request_id=?').run(id); store.db.prepare('DELETE FROM send_events WHERE request_id=?').run(id); store.db.prepare('DELETE FROM sends WHERE id=?').run(id); }
       return { events: events.length, sends: sends.length };
     });

@@ -20,7 +20,7 @@
 
 桥从已领取的事件中查找收件人，自动生成稳定 request_id。微信确认全部文字分段及媒体消息后，才 ack 事件；响应包括 state=accepted、event_completed=true 和 timing。若网络不确定或发送被拒绝，保留事件且不自动重发。崩溃发生在发送成功、ack 之前时，后续 muse/tasks 会依据持久化发送结果完成事件，避免再次交给 Muse 执行。
 
-v0.4.0-rc.1 可附 `"media":[{"type":"image","path":"/absolute/result.png"},{"type":"video","path":"/absolute/result.mp4"}]`，有媒体时 text 可省略。最多 4 个，仅接受桥所在机器上的绝对路径，并检查 config.media_roots。图片 20 MiB、视频 50 MiB 本地上限。桥按文字分段、media 数组顺序发送；CLI 多个 --image 排在多个 --video 前。详见 [媒体说明](MEDIA.md)。
+v0.4.0-rc.2 可附 `"media":[{"type":"image","path":"/absolute/result.png"},{"type":"video","path":"/absolute/result.mp4"}]`，有媒体时 text 可省略。最多 4 个，仅接受桥所在机器上的绝对路径，并检查 config.media_roots。图片 20 MiB、视频 50 MiB 本地上限。桥按文字分段、media 数组顺序发送；CLI 多个 --image 排在多个 --video 前。详见 [媒体说明](MEDIA.md)。
 
 进度回复额外传 `"mode":"progress","reply_id":"started"`。progress 需要每条进度的稳定 reply_id，成功后不结束任务。最终回复 mode 默认为 final，不能指定 reply_id、to、binding 或 request_id，避免更换编号绕过去重或发错用户。两个模式均支持可选 model_ready_at。
 
@@ -81,7 +81,7 @@ CDN 上传在 media_timeout_ms（默认 120000）总时限内最多尝试三次�
 
 - `GET /v1/events?limit=20&lease=30m&wait=30s`：领取。limit 1..100、lease 1 秒..1 小时、wait 0..60 秒；等待请求有事件时立即返回。
 - `POST /v1/events/ack`：正文 `{"event_ids":["muse:123"],"lease_token":"当前领取 token"}`；多事件不同 token 用 lease_tokens 对象按 event_id 映射，处理完确认。
-- `GET /v1/status`：version、capabilities、登录、接收状态、收件箱数量、发送中请求数；升级后应显示 version=0.4.0-rc.1、capabilities.send 含 image/video。
+- `GET /v1/status`：version、capabilities、登录、接收状态、收件箱数量、发送中请求数；升级后应显示 version=0.4.0-rc.2、capabilities.send 含 image/video。
 - `GET /v1/metrics`：最近 300 请求的状态计数，以及成功请求耗时 p50/p95。失败和 pending 不混入成功耗时。
 - `GET /healthz`：进程存活；微信连通性看 status 或 muse-link health。
 

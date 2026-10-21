@@ -35,7 +35,7 @@
 4. 为仓库设置上方描述，建议 topics：`muse`、`wechat`、`clawbot`、`ilink`、`nodejs`。在仓库 Security 设置中启用 Private vulnerability reporting。
 5. 等待 GitHub Actions 通过；本地通过不代表 GitHub 上的运行已经通过。之后可按下面步骤创建首个 Release。
 
-## 发布 0.4.0-rc.1 候选版
+## 发布 0.4.0-rc.2 候选版
 
 ```bash
 npm ci
@@ -45,9 +45,9 @@ npm run soak -- --duration 60s --report dist/soak-local.json
 python scripts/build_app_package.py
 ```
 
-构建生成 `dist/muse-link-v0.4.0-rc.1.zip` 与同名 `.zip.sha256`。ZIP 是不含依赖的完整源码包，需在目标环境 `npm ci`，再按 [部署文档](MUSE.md) 安装。GitHub Actions 的 Ubuntu 作业也会上传源码包作为构建产物；工作流不创建 Release、不使用微信凭据、不部署服务。
+构建生成 `dist/muse-link-v0.4.0-rc.2.zip` 与同名 `.zip.sha256`。ZIP 是不含依赖的完整源码包，需在目标环境 `npm ci`，再按 [部署文档](MUSE.md) 安装。GitHub Actions 的 Ubuntu 作业也会上传源码包作为构建产物；工作流不创建 Release、不使用微信凭据、不部署服务。
 
-在本地将验收过的提交打标签 `v0.4.0-rc.1` 并推送标签，然后在 GitHub Releases 创建对应版本，附加 ZIP 与校验和。发布说明使用 [RELEASE_NOTES_v0.4.0-rc.1.md](RELEASE_NOTES_v0.4.0-rc.1.md)。后续发版需同步 `package.json`、lockfile、`src/config.mjs` 的版本及相应文档；不要覆盖已经发布的同版本资产。
+在本地将验收过的提交打标签 `v0.4.0-rc.2` 并推送标签，然后在 GitHub Releases 创建对应版本，附加 ZIP 与校验和。发布说明使用 [RELEASE_NOTES_v0.4.0-rc.2.md](RELEASE_NOTES_v0.4.0-rc.2.md)。后续发版需同步 `package.json`、lockfile、`src/config.mjs` 的版本及相应文档；不要覆盖已经发布的同版本资产。
 
 版本说明应保留实际能力边界：本地模拟通过，真实 Muse hooks、微信手机收取及视频播放待验收；不承诺固定耗时，不声称读取微信图片或视频。
 

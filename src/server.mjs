@@ -15,7 +15,9 @@ function json(response, status, value) {
   response.end(JSON.stringify(value) + '\n');
 }
 async function readJson(request) {
-  if (!request.headers['content-type']?.toLowerCase().startsWith('application/json')) fail('content_type', 'Content-Type must be application/json.', 415);
+  if (request.headers['content-type']?.split(';', 1)[0].trim().toLowerCase() !== 'application/json') {
+    request.resume(); fail('content_type', 'Content-Type must be application/json.', 415);
+  }
   let size = 0;
   const chunks = [];
   for await (const chunk of request.iterator({ destroyOnReturn: false })) {
@@ -25,6 +27,12 @@ async function readJson(request) {
   }
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
   catch { fail('invalid_json', 'Invalid JSON.'); }
+}
+function requestId(encoded) {
+  let id;
+  try { id = decodeURIComponent(encoded); } catch { fail('invalid_request_id', 'Malformed request_id encoding.'); }
+  if (!/^[A-Za-z0-9_.:-]{1,128}$/.test(id)) fail('invalid_request_id', 'Invalid request_id.');
+  return id;
 }
 
 export function createApi(bridge) {
@@ -73,7 +81,7 @@ export function createApi(bridge) {
         return json(response, 200, { acked: bridge.store.ack(body.event_ids) });
       }
       if (request.method === 'GET' && url.pathname.startsWith('/v1/requests/')) {
-        const row = bridge.store.send(decodeURIComponent(url.pathname.slice('/v1/requests/'.length)));
+        const row = bridge.store.send(requestId(url.pathname.slice('/v1/requests/'.length)));
         if (!row) fail('not_found', 'Unknown request_id.', 404);
         // Never return tokens, recipient identifiers, or reply text in diagnostics.
         return json(response, 200, { request_id: row.id, state: row.state, result: row.result });
@@ -82,7 +90,7 @@ export function createApi(bridge) {
       if (request.method === 'POST' && review) {
         const body = await readJson(request);
         if (body?.reviewed !== true || typeof body.note !== 'string' || !body.note.trim() || body.note.length > 1000) fail('review_required', 'Explicit reviewed=true and a note (up to 1000 characters) are required.');
-        return json(response, 200, bridge.store.reviewSend(decodeURIComponent(review[1]), body.note));
+        return json(response, 200, bridge.store.reviewSend(requestId(review[1]), body.note));
       }
       return json(response, 404, { error: 'not_found' });
     } catch (error) {

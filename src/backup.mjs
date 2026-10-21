@@ -1,8 +1,8 @@
 import { backup, DatabaseSync } from 'node:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { chmod, copyFile, lstat, mkdir, mkdtemp, readdir, readFile, rename, access, writeFile } from 'node:fs/promises';
-import { dirname, join, relative, resolve } from 'node:path';
+import { chmod, copyFile, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, access, writeFile } from 'node:fs/promises';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { Store, SCHEMA_VERSION } from './store.mjs';
 import { VERSION } from './config.mjs';
@@ -11,6 +11,17 @@ import { within } from './media.mjs';
 import { fail } from './errors.mjs';
 
 async function exists(path) { try { await access(path); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } }
+// Resolve existing ancestors too: a new leaf beneath a junction/symlink still
+// belongs to the real parent. Do not treat dangling links as absent directories.
+async function canonical(path) {
+  path = resolve(path);
+  try { await lstat(path); }
+  catch (error) {
+    if (error.code !== 'ENOENT' || path === dirname(path)) throw error;
+    return join(await canonical(dirname(path)), basename(path));
+  }
+  return realpath(path);
+}
 async function digest(path) { const hash = createHash('sha256'); for await (const chunk of createReadStream(path)) hash.update(chunk); return hash.digest('hex'); }
 async function files(directory, base = directory) {
   const output = [];
@@ -37,7 +48,7 @@ function checkDb(path) {
 
 export async function backupState(config, output) {
   const destination = resolve(output);
-  if (within(resolve(config.state_dir), destination)) fail('invalid_backup_path', 'Backup must be outside state_dir.');
+  if (within(await canonical(config.state_dir), await canonical(destination))) fail('invalid_backup_path', 'Backup must be outside state_dir.');
   if (!await exists(join(config.state_dir, 'bridge.sqlite'))) fail('missing_state', 'No state database exists to back up.');
   const unlock = lockState(config.state_dir);
   let database;
@@ -82,7 +93,9 @@ export async function verifyBackup(directory) {
 
 export async function restoreState(config, source) {
   const target = resolve(config.state_dir);
-  if (target === dirname(target) || target === resolve(homedir()) || within(target, resolve(source))) fail('invalid_restore_path', 'Restore requires a dedicated state directory and an external backup.');
+  const identity = await canonical(target);
+  const backupIdentity = await canonical(source);
+  if (identity === dirname(identity) || within(identity, await canonical(homedir())) || within(identity, backupIdentity) || within(backupIdentity, identity)) fail('invalid_restore_path', 'Restore requires a dedicated state directory and an external backup.');
   const unlock = lockState(target);
   try {
     const manifest = await verifyBackup(source);

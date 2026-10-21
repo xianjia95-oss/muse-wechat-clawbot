@@ -1,6 +1,6 @@
 # 生产运行与验收
 
-当前版本 **0.4.0-rc.1** 是生产加固候选版。代码和本地故障测试不能证明 Meta Muse 的实际 hooks、微信账号收发和手机媒体播放已经通过。完成本文的真实验收后，才能为该部署作出上线判断。
+当前版本 **0.4.0-rc.2** 是生产加固候选版。代码和本地故障测试不能证明 Meta Muse 的实际 hooks、微信账号收发和手机媒体播放已经通过。完成本文的真实验收后，才能为该部署作出上线判断。
 
 ## 运行范围
 
@@ -8,7 +8,7 @@
 
 服务、登录、导入、维护、备份和恢复均使用 state_dir 同级的 SQLite 独占锁；更换 HTTP 端口也不能启动第二个所有者。进程被强制终止后由操作系统释放锁，不依赖删除 PID 文件。不要删除运行中的 `.lock.sqlite` 或其辅助文件。`inbox count` 是只读诊断，服务运行时可用。
 
-API 只监听 loopback，除存活探针外都需要私密 token。限制 media_roots 到实际生成目录；不放入 HOME 根目录。systemd 的 PrivateTmp 隔离 /tmp，跨进程生成文件应导出到持久化 workspace。配置、SQLite、上传快照和备份含凭据或用户内容，不能上传公开仓库；Linux 目录使用 0700，文件使用 0600，Windows 需按服务账号设置目录 ACL。
+API 只监听 loopback，除存活探针外都需要私密 token。用 init 生成真实配置；示例 token 无法通过校验。token 接受 32..256 个可见 ASCII 字符，不能含空格或控制字符，应随机生成，不使用公开或易猜值；已有随机十六进制和 Base64 token 可继续使用。限制 media_roots 到实际生成目录；不放入 HOME 根目录。systemd 的 PrivateTmp 隔离 /tmp，跨进程生成文件应导出到持久化 workspace。配置、SQLite、上传快照和备份含凭据或用户内容，不能上传公开仓库；Linux 目录使用 0700，文件使用 0600，Windows 需按服务账号设置目录 ACL。
 
 本地 API 正文最多 256 KiB，上游 JSON 响应以流读取并限制 4 MiB，超出时失败关闭；工具步骤每项结果最多 16 KiB、每任务最多 1024 项。限制均为本项目的资源保护，不代表腾讯协议上限。
 
@@ -17,7 +17,7 @@ API 只监听 loopback，除存活探针外都需要私密 token。限制 media_
 1. 阅读变更，完成已领取任务或保存交接记录；暂停 Muse hook，停止服务。不要用新进程与旧桥同时轮询同一微信账号。
 2. 从新版本解压目录运行 `bash deploy/install.sh`。依赖先安装在 releases 的候选目录，失败不会切换 current。已有状态会在切换前备份到 `~/.local/share/muse-link/backups/pre-upgrade-*`。保留配置和登录，不自动启动服务。
 3. 更新 Muse worker，使用当前版本的 lease_token、renew、checkpoint 协议。旧配置省略 require_lease_token 时也默认为 true；旧 worker 不带 token 会返回 409，不能只升级后台。
-4. 合并需要的配置，启动服务，确认 status.version=0.4.0-rc.1、health 通过；dry_run hook 后启用。保留上一版及私密备份。
+4. 合并需要的配置，启动服务，确认 status.version=0.4.0-rc.2、health 通过；dry_run hook 后启用。保留上一版及私密备份。
 
 普通用户为以下 systemctl 命令加 `sudo -n`：
 
@@ -46,7 +46,7 @@ bash "$HOME/.local/share/muse-link/rollback.sh"
 
 对会修改外部状态、耗时昂贵或不应重复的工具操作：先用稳定 step 名写 started，成功后写 completed 及可恢复结果，再进入下一步。completed 返回 cached 时复用结果，不再执行工具。恢复时有 started/needs_review，先核对外部系统和旧 worker 是否仍在运行，不能自动重复该操作；核对后用当前租约和 `--reviewed` 记录 completed。不要把“已写 started”当作工具已成功。
 
-租约只能拒绝旧 worker 后续调用桥，不能撤销已经提交到外部系统的操作。步骤日志与第三方工具不在一个事务中，**不保证任意外部副作用恰好执行一次**。对于付款、发布等操作，仍要使用目标系统的幂等键和相应人工授权。
+领取取消后不会再分配任务；已分配但响应未到达客户端的任务，仍需等租约到期恢复。排队回复及媒体上传后会在每次 chat 提交前重新校验租约。租约只能拒绝旧 worker 后续调用桥，不能撤销已经在网络中或已提交到外部系统的操作。步骤日志与第三方工具不在一个事务中，**不保证任意外部副作用恰好执行一次**。对于付款、发布等操作，仍要使用目标系统的幂等键和相应人工授权。
 
 最终回复必须带当前 lease_token。accepted 后自动 ack；接收重复批次、重复回复、发送成功但未 ack 的重启不会自动再发。进度回复用稳定 reply_id。不要通过底层 send 绕过 Muse 的租约、路由与步骤检查。请将工具结果和生成文件路径也保存到 Muse 侧交接记录，单个 checkpoint 结果最多 16 KiB。
 
@@ -73,7 +73,7 @@ bash "$HOME/.local/share/muse-link/rollback.sh"
 
 429、503、507 带 `Retry-After: 5`。先检查 request 状态；只有确认未创建意图，或为安全可续传的 failed，才在修复/等待后用相同 ID 和相同内容重试。客户端断开不会取消已接受的发送。unknown、rejected 不自动重发，不能换 ID 绕过。
 
-维护每轮最多清理 500 个过期事件、500 个发送记录和 500 个媒体作业，并清理超过 24 小时的无引用 outbox 文件。SQLite 做 WAL checkpoint，删除页供后续复用，数据库文件不一定缩小；文件仍接近预算时，先离线备份并排查未完成任务，再制定扩容/归档方案，不应直接删库。不会无限保留全部历史：超过保留窗口并清理后，旧 ID 可再次被视为新请求，调用方不可永久重用旧 ID，Muse 侧应保留业务去重记录。
+维护每轮最多清理 500 个过期事件、500 个发送记录和 500 个媒体作业，并清理超过 24 小时的无引用 outbox 文件。无事件关联的旧版本 muse-* 记录在任意任务未完成时保守保留，排空并核对后才按保留期清理。SQLite 做 WAL checkpoint，删除页供后续复用，数据库文件不一定缩小；文件仍接近预算时，先离线备份并排查未完成任务，再制定扩容/归档方案，不应直接删库。不会无限保留全部历史：超过保留窗口并清理后，旧 ID 可再次被视为新请求，调用方不可永久重用旧 ID，Muse 侧应保留业务去重记录。
 
 ```bash
 systemctl stop muse-link
