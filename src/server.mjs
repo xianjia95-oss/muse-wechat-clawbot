@@ -1,9 +1,17 @@
 import { createServer } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 import { BridgeError, duration, fail } from './errors.mjs';
-import { MuseAdapter } from './muse.mjs';
+import { MuseAdapter, museRequestId } from './muse.mjs';
 import { operational } from './config.mjs';
 import { health } from './operations.mjs';
+import { deliveryDiagnostics } from './diagnostics.mjs';
+
+const workerActions = new Map([
+  ['GET /v1/events', 'claim'], ['GET /v1/muse/tasks', 'claim'],
+  ['POST /v1/muse/replies', 'reply'], ['POST /v1/muse/renew', 'renew'],
+  ['POST /v1/muse/checkpoints', 'checkpoint'], ['POST /v1/events/ack', 'ack'],
+  ['POST /v1/send', 'send'],
+]);
 
 function authorized(actual, token) {
   const left = Buffer.from(actual ?? '');
@@ -44,14 +52,23 @@ export function createApi(bridge) {
     response.once('close', () => { active--; });
     const controller = new AbortController();
     response.on('close', () => controller.abort());
+    let action;
+    response.once('finish', () => {
+      if (action && response.statusCode < 300 && bridge.worker.last_api_error?.action === action) bridge.worker.last_api_error = null;
+    });
     try {
       const url = new URL(request.url, 'http://localhost');
       const route = `${request.method} ${url.pathname}`;
       if (route === 'GET /healthz') return json(response, 200, { alive: true });
       if (!authorized(request.headers.authorization, bridge.config.api_token)) return json(response, 401, { error: 'unauthorized' });
+      action = workerActions.get(route);
       if (route === 'GET /v1/health') { const result = health(bridge); return json(response, result.healthy ? 200 : 503, result); }
       if (route === 'GET /v1/status') return json(response, 200, bridge.status());
       if (route === 'GET /v1/metrics') return json(response, 200, bridge.store.metrics());
+      if (route === 'GET /v1/diagnostics') {
+        const readiness = health(bridge);
+        return json(response, 200, deliveryDiagnostics({ status: readiness, readiness, metrics: bridge.store.metrics() }));
+      }
       if (route === 'POST /v1/send') {
         const body = await readJson(request);
         if (body && typeof body === 'object' && !body.request_id) body.request_id = request.headers['idempotency-key'];
@@ -64,7 +81,7 @@ export function createApi(bridge) {
         const binding = url.searchParams.get('binding');
         if (binding && binding !== bridge.config.binding) fail('unknown_binding', 'Unknown binding.', 404);
         const options = {
-          limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : 20,
+          limit: url.searchParams.has('limit') ? Number(url.searchParams.get('limit')) : route === 'GET /v1/muse/tasks' ? 1 : 20,
           lease: duration(url.searchParams.get('lease') ?? undefined, 1800000),
           wait: duration(url.searchParams.get('wait') ?? undefined, 0),
         };
@@ -78,7 +95,9 @@ export function createApi(bridge) {
           bridge.store.requireLease(id, body.lease_tokens?.[id] ?? body.lease_token);
           if (bridge.store.steps(id).some((step) => step.state === 'started')) fail('task_step_uncertain', 'Resolve unfinished tool steps before acknowledging.', 409);
         }
-        return json(response, 200, { acked: bridge.store.ack(body.event_ids) });
+        const acked = bridge.store.ack(body.event_ids);
+        for (const id of body.event_ids) bridge.log('task_acknowledged', { request_id: museRequestId(id), source: 'explicit_ack' });
+        return json(response, 200, { acked });
       }
       if (request.method === 'GET' && url.pathname.startsWith('/v1/requests/')) {
         const row = bridge.store.send(requestId(url.pathname.slice('/v1/requests/'.length)));
@@ -94,6 +113,11 @@ export function createApi(bridge) {
       }
       return json(response, 404, { error: 'not_found' });
     } catch (error) {
+      if (action) {
+        bridge.worker.last_api_error = { at: new Date().toISOString(), action, code: error instanceof BridgeError ? error.code : 'internal_error', status: error instanceof BridgeError ? error.status : 500 };
+        if (error.code === 'stale_lease') Object.assign(bridge.worker.last_api_error, { lease_reason: error.details?.lease_reason, lease_until: error.details?.lease_until, acked_ms: error.details?.acked_ms, server_time: error.details?.server_time });
+        bridge.log('worker_api_rejected', { ...bridge.worker.last_api_error });
+      }
       if (response.destroyed) return;
       if (error instanceof BridgeError) return json(response, error.status, { ok: false, error: error.code, message: error.message, ...error.details });
       bridge.log('internal_error', { name: error.name });

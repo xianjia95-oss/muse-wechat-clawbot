@@ -12,7 +12,7 @@ export class MuseAdapter {
 
   async next(options = {}, signal) {
     if (this.bridge.store.get('restore_review_required', false)) fail('restore_review_required', 'Reconcile restored state before claiming or executing tasks.', 409);
-    const events = await this.bridge.claim(options, signal);
+    const events = await this.bridge.claim({ ...options, limit: options.limit ?? 1 }, signal);
     const tasks = [];
     for (const event of events) {
       const finalId = museRequestId(event.event_id);
@@ -21,6 +21,7 @@ export class MuseAdapter {
       // Recover a crash after WeChat accepted the reply but before inbox ack.
       if (event.kind !== 'alert' && completed?.state === 'accepted') {
         this.bridge.store.ack([event.event_id]);
+        this.bridge.log('task_acknowledged', { request_id: finalId, source: 'accepted_recovery' });
         continue;
       }
       tasks.push({
@@ -47,6 +48,8 @@ export class MuseAdapter {
     return this.bridge.store.checkpoint(body.event_id, body.lease_token, body.step, body.phase, body.result, body.reviewed === true);
   }
   async reply(body) {
+    this.bridge.worker.reply_requests++;
+    this.bridge.worker.last_reply_at = new Date().toISOString();
     if (!body || typeof body !== 'object' || Array.isArray(body)) fail('invalid_body', 'JSON object required.');
     if (typeof body.event_id !== 'string' || !body.event_id || body.event_id.length > 512) fail('invalid_event_id', 'event_id is required.');
     const mode = body.mode ?? 'final';
@@ -73,7 +76,10 @@ export class MuseAdapter {
       ...(body.model_ready_at !== undefined ? { model_ready_at: body.model_ready_at } : {}),
     }, { eventId: body.event_id, leaseToken: body.lease_token });
     // A timeout, rejected reply or uncertain outcome never reaches this ack.
-    if (mode === 'final') this.bridge.store.ack([body.event_id]);
+    if (mode === 'final') {
+      this.bridge.store.ack([body.event_id]);
+      this.bridge.log('task_acknowledged', { request_id: requestId, source: 'final_reply' });
+    }
     return { ...result, event_id: body.event_id, mode, event_completed: mode === 'final' || row.acked_ms !== null };
   }
 }

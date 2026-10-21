@@ -1,10 +1,10 @@
-请在你（Meta Muse）自己的云端部署 Muse Link v0.4.0-rc.2，把你对接我的微信ClawBot。本版为单账号、单实例生产加固候选版，仍须真实验收。
+请在你（Meta Muse）自己的云端部署 Muse Link v0.4.0-rc.3，把你对接我的微信ClawBot。本版为单账号、单实例生产加固候选版，仍须真实验收。
 
 先读README.md、docs/MUSE.md、docs/PRODUCTION.md。已有Muse Link按docs/给Muse升级的指令.txt操作，保留配置/账号/状态。新安装确认Node.js24+、systemd、持久化本地磁盘、网络代理和真实Muse hooks权限，以Muse HOME属主执行bash deploy/install.sh，不sudo整个安装器，不运行两套微信接收进程。
 
 参考教程https://upgpts.com/en/tutorials/muse/muse-wechat 与腾讯协议https://github.com/tencent/openclaw-weixin/blob/HEAD/docs/protocol_zh_CN.md 。需要扫码时按MUSE.md运行独立login，立即展示每条新qr的原图，写明编号和客户端刷新时间；verification_required时按实际手机数字和最新code_file从stdin提交，不放进参数或日志。submitted不等于登录成功，等logged_in=true后再启动服务。微信账号是否支持ClawBot由实际情况决定。
 
-启动后status.version须为0.4.0-rc.2、health至少一次轮询成功。用真实Muse原生hooks注册，采用docs/MUSE.md完整worker指令，记录实际标识/状态/检测间隔，先dry_run再启用，dry_run不领取任务。必须有常驻连接进程和具备工具权限的真实Muse worker，不能只安装接收服务或假称hook注册成功。
+启动后status.version须为0.4.0-rc.3、health至少一次轮询成功。用真实Muse原生hooks注册，采用docs/MUSE.md完整worker指令，记录实际标识/状态/检测间隔，先dry_run再启用，dry_run不领取任务。必须有常驻连接进程和具备工具权限的真实Muse worker，不能只安装接收服务或假称hook注册成功。
 
 任务领取后保存event_id、lease_token、lease_until，检查execution和completion。每次回复/ack/renew/checkpoint带当前token，长任务续租，外部工具前后记录稳定步骤；遗留started先核对，completed cached复用结果，不重复执行。结果准备好立即muse reply回微信，不等下一轮hook。生成文件先完整导出到允许的持久化media_roots，再在同一最终回复加--image/--video；支持图片20MiB、视频50MiB，最多4个，不转码。最终成功自动ack，进度用稳定reply-id。入站附件下载和普通文件未实现，不能声称已读取。
 

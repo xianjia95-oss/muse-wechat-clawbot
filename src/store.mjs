@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, existsSync, lstatSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { fail } from './errors.mjs';
+import { inspectLease } from './lease.mjs';
 
 export const SCHEMA_VERSION = 1;
 
@@ -95,9 +96,10 @@ export class Store {
     });
   }
   requireLease(id, token) {
-    if (typeof id !== 'string' || !id || typeof token !== 'string') fail('stale_lease', 'event_id and current lease_token are required.', 409);
+    if (typeof id !== 'string' || !id) fail('stale_lease', 'event_id is required.', 409, { lease_reason: 'invalid_event_id', server_time: Date.now() });
     const row = this.event(id);
-    if (!row || row.acked_ms !== null || row.lease_until <= Date.now() || typeof token !== 'string' || row.lease_token !== token) fail('stale_lease', 'Current unexpired lease_token is required; do not execute or resend work under an old lease.', 409);
+    const detail = inspectLease(row, token);
+    if (detail.lease_reason) fail('stale_lease', `Lease rejected: ${detail.lease_reason}. Use the captured lease for this event; do not bypass the check.`, 409, detail);
     return row;
   }
   renew(id, token, leaseMs) {
@@ -122,12 +124,15 @@ export class Store {
   }
   queueStats() {
     const now = Date.now();
+    const pending = this.db.prepare('SELECT count(*) AS n,min(received_ms) AS oldest,min(CASE WHEN lease_until>? THEN lease_until END) AS next_expiry FROM events WHERE acked_ms IS NULL').get(now);
+    const leased = this.db.prepare('SELECT count(*) AS n FROM events WHERE acked_ms IS NULL AND lease_until>?').get(now).n;
     return {
-      pending: this.db.prepare('SELECT count(*) AS n FROM events WHERE acked_ms IS NULL').get().n,
-      leased: this.db.prepare('SELECT count(*) AS n FROM events WHERE acked_ms IS NULL AND lease_until>?').get(now).n,
+      pending: pending.n, leased, ready: pending.n - leased,
+      oldest_pending_ms: pending.oldest, next_lease_expiry_ms: pending.next_expiry,
       oldest_ready_ms: this.db.prepare('SELECT min(received_ms) AS n FROM events WHERE acked_ms IS NULL AND lease_until<=?').get(now).n,
       unknown_sends: this.db.prepare("SELECT count(*) AS n FROM sends WHERE state='unknown' AND coalesce(json_extract(result,'$.reviewed'),0)=0").get().n,
       unresolved_steps: this.db.prepare("SELECT count(*) AS n FROM task_steps s JOIN events e ON e.id=s.event_id WHERE s.state='started' AND (s.lease_token<>e.lease_token OR e.lease_until<=?)").get(now).n,
+      started_steps: this.db.prepare("SELECT count(*) AS n FROM task_steps s JOIN events e ON e.id=s.event_id WHERE s.state='started' AND e.acked_ms IS NULL").get().n,
     };
   }
   ack(ids) {

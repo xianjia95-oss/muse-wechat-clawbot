@@ -6,7 +6,7 @@
 
 这些接口运行在桥上，由真实 Muse 在其原生 hooks 中调用，并非 Muse 官方模型 API。
 
-`GET /v1/muse/tasks?limit=20&lease=30m&wait=0s` 领取任务，返回 `{"tasks":[...]}`。任务包含原始事件字段、lease_token、lease_until、execution.steps / execution.needs_review 及 completion，其中 request_id 为最终回复的固定编号，state 为 not_submitted / pending / accepted / rejected / unknown / failed。同一租约参数范围与下方收件箱接口相同。读取不会自动执行 Muse 任务。
+`GET /v1/muse/tasks?limit=1&lease=30m&wait=0s` 领取任务，默认 limit=1，返回 `{"tasks":[...]}`。任务包含原始事件字段、lease_token、lease_until、execution.steps / execution.needs_review 及 completion，其中 request_id 为最终回复的固定编号，state 为 not_submitted / pending / accepted / rejected / unknown / failed。同一租约参数范围与下方收件箱接口相同。读取不会自动执行 Muse 任务。
 
 最终回复 `POST /v1/muse/replies`：
 
@@ -20,13 +20,15 @@
 
 桥从已领取的事件中查找收件人，自动生成稳定 request_id。微信确认全部文字分段及媒体消息后，才 ack 事件；响应包括 state=accepted、event_completed=true 和 timing。若网络不确定或发送被拒绝，保留事件且不自动重发。崩溃发生在发送成功、ack 之前时，后续 muse/tasks 会依据持久化发送结果完成事件，避免再次交给 Muse 执行。
 
-v0.4.0-rc.2 可附 `"media":[{"type":"image","path":"/absolute/result.png"},{"type":"video","path":"/absolute/result.mp4"}]`，有媒体时 text 可省略。最多 4 个，仅接受桥所在机器上的绝对路径，并检查 config.media_roots。图片 20 MiB、视频 50 MiB 本地上限。桥按文字分段、media 数组顺序发送；CLI 多个 --image 排在多个 --video 前。详见 [媒体说明](MEDIA.md)。
+v0.4.0-rc.3 可附 `"media":[{"type":"image","path":"/absolute/result.png"},{"type":"video","path":"/absolute/result.mp4"}]`，有媒体时 text 可省略。最多 4 个，仅接受桥所在机器上的绝对路径，并检查 config.media_roots。图片 20 MiB、视频 50 MiB 本地上限。桥按文字分段、media 数组顺序发送；CLI 多个 --image 排在多个 --video 前。详见 [媒体说明](MEDIA.md)。
 
 进度回复额外传 `"mode":"progress","reply_id":"started"`。progress 需要每条进度的稳定 reply_id，成功后不结束任务。最终回复 mode 默认为 final，不能指定 reply_id、to、binding 或 request_id，避免更换编号绕过去重或发错用户。两个模式均支持可选 model_ready_at。
 
 同一最终回复重复提交相同文字及媒体类型/路径，返回缓存并修复未完成的 ack；更换文字、媒体类型或路径重用最终回复会报 ID 冲突。媒体 ID 绑定首次成功准备的文件快照；原路径后续内容变化不会替换已有快照，成功后重试返回旧结果。unknown 需核对微信及在 Muse 聊天报告，不能另起编号盲目重发。需要主动结束未发送的任务或处理 alert 时，报告并持久化结果后再调用 events/ack。外部任务本身的执行去重仍需由 Muse 按 event_id 记录进度。
 
 命令行对应：`muse-link muse next`、`muse-link muse reply EVENT_ID --lease-token '<lease_token>' --text -`、`muse-link muse ack EVENT_ID --lease-token '<lease_token>'`。保留以下底层发送接口用于诊断。
+
+rc.3 的 next 支持 `--output /private/new-task.json`。请求前独占创建 0600 文件，父目录须私密且不经过符号链接；先保存原始领取响应并 fsync，再输出。不能覆盖旧记录。文件含原 token 和消息正文，只用于本地交接；收到成功响应但保存失败时，退出非零并在 stdout 保留响应供原 worker 私密保存。不能只凭文件存在就执行任务，应检查 claim_state=response_saved 与 tasks，并按 [交接流程](MUSE.md#跨班次交接) 确认旧 worker 停止、校验租约和核对工具进度。
 
 ## 即时回复
 
@@ -81,7 +83,7 @@ CDN 上传在 media_timeout_ms（默认 120000）总时限内最多尝试三次�
 
 - `GET /v1/events?limit=20&lease=30m&wait=30s`：领取。limit 1..100、lease 1 秒..1 小时、wait 0..60 秒；等待请求有事件时立即返回。
 - `POST /v1/events/ack`：正文 `{"event_ids":["muse:123"],"lease_token":"当前领取 token"}`；多事件不同 token 用 lease_tokens 对象按 event_id 映射，处理完确认。
-- `GET /v1/status`：version、capabilities、登录、接收状态、收件箱数量、发送中请求数；升级后应显示 version=0.4.0-rc.2、capabilities.send 含 image/video。
+- `GET /v1/status`：version、capabilities、登录、接收状态、收件箱数量、发送中请求数；升级后应显示 version=0.4.0-rc.3、capabilities.send 含 image/video。
 - `GET /v1/metrics`：最近 300 请求的状态计数，以及成功请求耗时 p50/p95。失败和 pending 不混入成功耗时。
 - `GET /healthz`：进程存活；微信连通性看 status 或 muse-link health。
 
@@ -90,6 +92,10 @@ CDN 上传在 media_timeout_ms（默认 120000）总时限内最多尝试三次�
 ## 生产候选版的租约、步骤与健康
 
 默认 require_lease_token=true。回复、进度、ack、续租和 checkpoint 使用当前有效租约；旧 token / 已过期 / 已确认事件返回 409 stale_lease。已经 accepted 的相同回复可读取缓存，无需重新触发发送。底层 send 没有 Muse 执行语义，仅供受信诊断调用。
+
+rc.3 的 stale_lease 带 lease_reason（missing_token / token_mismatch / lease_expired / event_acknowledged / event_not_found / invalid_event_id）、server_time，存在事件时带 lease_until 和 acked_ms。时间均为 epoch 毫秒，不返回 token。保持原错误码兼容，不能把所有 stale_lease 统称为租约过期。
+
+`GET /v1/diagnostics` / `muse-link diagnose` 只读返回队列、worker 活动、最近拒绝原因和发送阶段；worker 计数自本次服务启动起有效，成功的同类调用会清除对应最近错误。status 也增加 queue、worker、delivery。旧 inbox pull/ack 默认使用 API，--offline 须停服务；底层 GET /v1/events 保持默认 20，CLI inbox pull 默认 1。详见 [无回复排查](TROUBLESHOOTING.md)。
 
 - `POST /v1/muse/renew`：`{"event_id":"muse:123","lease_token":"...","lease_ms":1800000}`，1 秒到 1 小时，返回新的 lease_until，token 不变。
 - `POST /v1/muse/checkpoints`：`{"event_id":"muse:123","lease_token":"...","step":"tool-action","phase":"started","result":null}`；工具完成后同 step、phase=completed，result 最多 16 KiB。完成的步骤返回 cached=true，应跳过工具。重投后的 started 无法再次开始，需核对后用 reviewed=true 完成记录；遗留 started 阻止最终回复和 ack。步骤和外部系统不在同一事务，不能保证外部动作恰好一次。

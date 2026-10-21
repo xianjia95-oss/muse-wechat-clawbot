@@ -25,6 +25,8 @@ export class Bridge {
     this.inflight = new Map();
     this.peerTails = new Map();
     this.peerCounts = new Map();
+    this.deliveries = new Map();
+    this.worker = { since: new Date().toISOString(), claim_requests: 0, claimed_events: 0, last_claim_at: null, last_task_at: null, reply_requests: 0, last_reply_at: null, last_api_error: null, last_ingest_at: null };
     this.resources = new Resources(config);
     this.stopping = false;
     this.events = new EventEmitter();
@@ -38,14 +40,17 @@ export class Bridge {
   }
   status() {
     const session = this.store.get('session');
+    const queue = this.store.queueStats();
+    const deliveries = [...this.deliveries.values()];
     return {
       binding: this.config.binding,
       version: VERSION,
       capabilities: { send: ['text', 'image', 'video'], receive: ['text', 'voice_transcript'] },
       logged_in: !!session && !this.store.get('expired', false),
       poll: this.poll,
-      ready_events: this.store.count(),
+      ready_events: queue.ready, queue, worker: { ...this.worker },
       inflight_sends: this.inflight.size,
+      delivery: { ...Object.fromEntries(['queued', 'preparing', 'uploading', 'sending'].map((stage) => [stage, deliveries.filter((item) => item.stage === stage).length])), oldest_inflight_ms: deliveries.length ? Date.now() - Math.min(...deliveries.map((item) => item.at)) : null },
       transport: 'direct-send / dedicated-send-and-poll-pools',
     };
   }
@@ -98,12 +103,14 @@ export class Bridge {
     const began = performance.now();
     const submittedAt = Date.now();
     const previous = this.peerTails.get(body.to) ?? Promise.resolve();
+    this.deliveries.set(body.request_id, { stage: 'queued', at: submittedAt });
     const work = previous.catch(() => {}).then(() => this.deliver(body, chunks, began, submittedAt, eventId, leaseToken));
     this.peerTails.set(body.to, work);
     this.inflight.set(body.request_id, work);
     this.peerCounts.set(body.to, (this.peerCounts.get(body.to) ?? 0) + 1);
     const clean = () => {
       this.inflight.delete(body.request_id);
+      this.deliveries.delete(body.request_id);
       const count = this.peerCounts.get(body.to) - 1;
       if (count) this.peerCounts.set(body.to, count); else this.peerCounts.delete(body.to);
       if (this.peerTails.get(body.to) === work) this.peerTails.delete(body.to);
@@ -135,7 +142,8 @@ export class Bridge {
       if (part) this.store.partState(body.request_id, part.part, state === 'failed' ? 'prepared' : state);
       const code = error instanceof BridgeError ? error.code : phase === 'prepare' ? 'media_prepare_failed' : phase === 'upload' ? 'media_upload_failed' : 'upstream_unknown';
       const result = { ok: false, request_id: body.request_id, state, phase, retryable: state === 'failed',
-        accepted_chunks: accepted, total_chunks: chunks.length, accepted_parts: accepted, total_parts: chunks.length, error: code, timing: timing() };
+        accepted_chunks: accepted, total_chunks: chunks.length, accepted_parts: accepted, total_parts: chunks.length, error: code, timing: timing(),
+        ...(code === 'stale_lease' ? { lease_reason: error.details?.lease_reason, lease_until: error.details?.lease_until, acked_ms: error.details?.acked_ms, server_time: error.details?.server_time } : {}) };
       this.store.finish(body.request_id, state, result);
       this.log('send_failed', result);
       throw new BridgeError(code, error instanceof BridgeError ? error.message : 'Sending failed; inspect request status before retrying.', error.status ?? 502, result);
@@ -154,6 +162,7 @@ export class Bridge {
     }
     // Validate and snapshot all attachments before sending even the caption.
     const preparing = performance.now();
+    this.deliveries.get(body.request_id).stage = 'preparing';
     try {
       for (const part of parts) {
         if (part.state === 'accepted' || chunks[part.part].type === 'text') continue;
@@ -176,6 +185,7 @@ export class Bridge {
         record = this.store.media(body.request_id, part.part);
         if (!record.media_item) {
           const uploading = performance.now();
+          this.deliveries.get(body.request_id).stage = 'uploading';
           try {
             record.media_item = await this.ilink.uploadMedia(this.store.get('session'), body.to, record);
             this.store.saveMedia(body.request_id, part.part, record);
@@ -193,6 +203,7 @@ export class Bridge {
       // Fence the old worker again immediately before each chat submission.
       checkLease();
       this.store.partState(body.request_id, part.part, 'sending');
+      this.deliveries.get(body.request_id).stage = 'sending';
       try {
         if (chunk.type === 'text') await this.ilink.sendText(this.store.get('session'), body.to, chunk.text, this.store.context(body.to), part.client_id);
         else await this.ilink.sendMedia(this.store.get('session'), body.to, record.media_item, this.store.context(body.to), part.client_id);
@@ -262,7 +273,11 @@ export class Bridge {
       // Events, tokens and cursor commit together; a failed batch is replayable.
       if (response.get_updates_buf !== undefined) this.store.set('cursor', response.get_updates_buf);
     });
-    if (added) this.events.emit('new');
+    if (added) {
+      this.worker.last_ingest_at = new Date().toISOString();
+      this.log('messages_received', { count: added });
+      this.events.emit('new');
+    }
     return added;
   }
   async runPoll() {
@@ -304,12 +319,19 @@ export class Bridge {
     integer(limit, 1, 100, 'limit');
     integer(lease, 1000, 3600000, 'lease');
     integer(wait, 0, 60000, 'wait');
+    this.worker.claim_requests++;
+    this.worker.last_claim_at = new Date().toISOString();
     const deadline = Date.now() + wait;
     for (;;) {
       if (this.stopping) fail('unavailable', 'Service is draining.', 503);
       // A disconnected waiter must not take work away from a live worker.
       if (signal?.aborted) return [];
       const events = this.store.claim(limit, lease);
+      if (events.length) {
+        this.worker.claimed_events += events.length;
+        this.worker.last_task_at = new Date().toISOString();
+        this.log('tasks_claimed', { count: events.length });
+      }
       if (events.length || Date.now() >= deadline) return events;
       await new Promise((resolve) => {
         const done = () => { clearTimeout(timer); this.events.off('new', done); signal?.removeEventListener('abort', done); resolve(); };

@@ -1,4 +1,4 @@
-请在你的真实 Meta Muse 云端验收 Muse Link v0.4.0-rc.2，按 docs/PRODUCTION.md 执行，不把候选版或本地测试当作已生产验收。
+请在你的真实 Meta Muse 云端验收 Muse Link v0.4.0-rc.3，按 docs/PRODUCTION.md 执行，不把候选版或本地测试当作已生产验收。
 
 先检查真实环境、Node.js 24、持久化本地磁盘、systemd、代理和 Muse hooks 权限。若已部署，按 docs/给Muse升级的指令.txt 升级，保留配置、登录与状态；不得运行两套同账号轮询。使用 docs/MUSE.md 的完整 worker 协议，每个回复/ack 带当前 lease_token，长任务续租，外部工具执行前后记录 checkpoint。started 未完成的步骤必须核对，不能自动重复执行。
 

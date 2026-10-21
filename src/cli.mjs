@@ -16,6 +16,7 @@ import { login, submitVerifyCode, waitForVerifyCode } from './login.mjs';
 import { lockState } from './state-lock.mjs';
 import { maintain } from './maintenance.mjs';
 import { backupState, restoreState, verifyBackup } from './backup.mjs';
+import { reserveTaskFile } from './task-file.mjs';
 
 process.umask(0o077);
 const print = (value) => console.log(JSON.stringify(value));
@@ -25,9 +26,9 @@ const help = `muse-link ${VERSION} — Meta Muse / WeChat ClawBot bridge (Node.j
   login verify --code-file PATH --text -
   run
   send --to WXID --text - --request-id UNIQUE_ID [--ready-at ISO_TIME]
-  inbox count | inbox pull [--limit 20] [--lease 30m] [--wait 30s]
-  inbox ack EVENT_ID... --lease-token TOKEN (offline)
-  muse next [--limit 20] [--lease 30m] [--wait 30s]
+  inbox count | inbox pull [--limit 1] [--lease 30m] [--wait 30s] [--offline]
+  inbox ack EVENT_ID... --lease-token TOKEN [--offline]
+  muse next [--limit 1] [--lease 30m] [--wait 30s] [--output /private/new-task.json]
   muse reply EVENT_ID --lease-token TOKEN --text - [--progress --reply-id STABLE_ID] [--ready-at ISO_TIME]
     [--image /absolute/image.png] [--video /absolute/video.mp4] (repeatable; text optional with media)
   muse ack EVENT_ID... --lease-token TOKEN
@@ -39,7 +40,7 @@ const help = `muse-link ${VERSION} — Meta Muse / WeChat ClawBot bridge (Node.j
   backup verify --from /private/backup
   restore --from /private/backup    (service must be stopped; pauses work for review)
   restore approve --reviewed --text -
-  status | metrics | request REQUEST_ID | health [--liveness]
+  status | metrics | request REQUEST_ID | health [--liveness] | diagnose
 Every command accepts --config PATH. No send health probe or direct-send fallback.
 `;
 
@@ -84,9 +85,13 @@ async function main() {
     image: { type: 'string', multiple: true }, video: { type: 'string', multiple: true },
     'lease-token': { type: 'string' }, step: { type: 'string' }, phase: { type: 'string' },
     reviewed: { type: 'boolean' }, output: { type: 'string' },
+    offline: { type: 'boolean' },
   } });
   const command = positionals[0];
   if (values.help || !command) { console.log(help); return; }
+  if (values.output && command !== 'backup' && !(command === 'muse' && positionals[1] === 'next')) fail('invalid_argument', '--output is only supported for backup and muse next.');
+  if (values.offline && !(command === 'inbox' && ['pull', 'ack'].includes(positionals[1]))) fail('invalid_argument', '--offline is only supported for inbox pull/ack.');
+  if (values.offline && duration(values.wait, 0) !== 0) fail('invalid_argument', 'Offline claims cannot wait for a running daemon.');
   const path = values.config ? expand(values.config) : defaultConfigPath();
   if (command === 'init') { print(initConfig(path)); return; }
   const config = loadConfig(path);
@@ -141,10 +146,23 @@ async function main() {
     }
     if (action === 'next') {
       const lease = integer(duration(values.lease, 1800000), 1000, 3600000, 'lease');
-      const limit = integer(Number(values.limit ?? 20), 1, 100, 'limit');
+      const limit = integer(Number(values.limit ?? 1), 1, 100, 'limit');
       const wait = integer(duration(values.wait, 0), 0, 60000, 'wait');
-      const result = await local(config, `/v1/muse/tasks?${new URLSearchParams({ limit, lease: `${lease}ms`, wait: `${wait}ms` })}`, { timeout: wait + 5000 });
-      if (result) print(result);
+      const output = values.output ? expand(values.output) : null;
+      const handoff = output ? reserveTaskFile(output, localUrl(config), config.path) : null;
+      try {
+        const result = await local(config, `/v1/muse/tasks?${new URLSearchParams({ limit, lease: `${lease}ms`, wait: `${wait}ms` })}`, { timeout: wait + 5000 });
+        if (result) {
+          try { handoff?.save(result); }
+          catch {
+            // Preserve the received claim in stdout if durable storage fails;
+            // the original worker must retain it and report the failure.
+            print({ ...result, handoff_saved: false });
+            fail('task_handoff_write_failed', 'Claim received but could not be saved; retain stdout privately before continuing.', 500);
+          }
+          print({ ...result, ...(output ? { handoff_file: output } : {}) });
+        }
+      } finally { handoff?.close(); }
       return;
     }
     if (action === 'reply') {
@@ -179,8 +197,8 @@ async function main() {
     if (result) print(result);
     return;
   }
-  if (['status', 'metrics', 'request', 'health'].includes(command)) {
-    const route = command === 'request' ? `/v1/requests/${encodeURIComponent(positionals[1] ?? '')}` : command === 'metrics' ? '/v1/metrics' : command === 'health' && !values.liveness ? '/v1/health' : '/v1/status';
+  if (['status', 'metrics', 'request', 'health', 'diagnose'].includes(command)) {
+    const route = command === 'diagnose' ? '/v1/diagnostics' : command === 'request' ? `/v1/requests/${encodeURIComponent(positionals[1] ?? '')}` : command === 'metrics' ? '/v1/metrics' : command === 'health' && !values.liveness ? '/v1/health' : '/v1/status';
     const result = await local(config, route, { timeout: values.liveness ? 1000 : 5000 });
     if (!result) return;
     if (command === 'health') {
@@ -200,9 +218,16 @@ async function main() {
     finally { db.close(); }
     return;
   }
-  if (command === 'inbox' && positionals[1] === 'pull' && duration(values.wait, 0) > 0) {
+  if (command === 'inbox' && positionals[1] === 'ack' && !values.offline) {
+    const ids = positionals.slice(2);
+    if (!ids.length) fail('missing_ids', 'Provide event IDs.');
+    const result = await local(config, '/v1/events/ack', { body: { event_ids: ids, lease_token: values['lease-token'] } });
+    if (result) print(result);
+    return;
+  }
+  if (command === 'inbox' && positionals[1] === 'pull' && !values.offline) {
     const lease = integer(duration(values.lease, 1800000), 1000, 3600000, 'lease');
-    const limit = integer(Number(values.limit ?? 20), 1, 100, 'limit');
+    const limit = integer(Number(values.limit ?? 1), 1, 100, 'limit');
     const wait = integer(duration(values.wait, 0), 0, 60000, 'wait');
     const result = await local(config, `/v1/events?${new URLSearchParams({ limit, lease: `${lease}ms`, wait: `${wait}ms` })}`, { timeout: wait + 5000 });
     if (result) print(result);
@@ -230,13 +255,8 @@ async function main() {
       if (action === 'pull') {
         if (store.get('restore_review_required', false)) fail('restore_review_required', 'Reconcile restored state before claiming work.', 409);
         const lease = integer(duration(values.lease, 1800000), 1000, 3600000, 'lease');
-        const limit = integer(Number(values.limit ?? 20), 1, 100, 'limit');
-        const wait = integer(duration(values.wait, 0), 0, 60000, 'wait');
-        if (!wait) print({ events: store.claim(limit, lease) });
-        else {
-          const result = await local(config, `/v1/events?${new URLSearchParams({ limit, lease: `${lease}ms`, wait: `${wait}ms` })}`, { timeout: wait + 5000 });
-          if (result) print(result);
-        }
+        const limit = integer(Number(values.limit ?? 1), 1, 100, 'limit');
+        print({ events: store.claim(limit, lease) });
         return;
       }
       fail('unknown_command', 'Use inbox count, pull, or ack.');

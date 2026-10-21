@@ -4,7 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { fail, integer } from './errors.mjs';
 
-export const VERSION = '0.4.0-rc.2';
+export const VERSION = '0.4.0-rc.3';
 export const OPS_DEFAULTS = Object.freeze({
   max_inflight_sends: 64, max_peer_sends: 16, max_pending_events: 2000,
   min_free_bytes: 128 * 1024 * 1024, max_state_bytes: 1024 * 1024 * 1024,

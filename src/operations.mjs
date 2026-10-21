@@ -47,7 +47,7 @@ export class Resources {
 export function health(bridge) {
   const limits = operational(bridge.config);
   const status = bridge.status();
-  const queue = bridge.store.queueStats();
+  const queue = status.queue;
   const problems = [];
   if (bridge.stopping) problems.push('shutting_down');
   if (bridge.store.get('restore_review_required', false)) problems.push('restore_review_required');
