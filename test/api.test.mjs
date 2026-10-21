@@ -1,0 +1,32 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import { createApi } from '../src/server.mjs';
+import { fixture, reply } from './helpers.mjs';
+
+test('HTTP API authenticates, sends immediately, queries receipts, leases and acks events', async (t) => {
+  const { bridge, config, calls } = fixture(t);
+  const server = createApi(bridge);
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(async () => { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); });
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const auth = { Authorization: `Bearer ${config.api_token}`, 'Content-Type': 'application/json' };
+  assert.equal((await fetch(base + '/v1/status')).status, 401);
+  assert.equal((await fetch(base + '/healthz')).status, 200);
+  const sent = await fetch(base + '/v1/send', { method: 'POST', headers: auth, body: JSON.stringify(reply()) });
+  assert.equal(sent.status, 200);
+  assert.equal((await sent.json()).state, 'accepted');
+  await fetch(base + '/v1/send', { method: 'POST', headers: auth, body: JSON.stringify(reply()) });
+  assert.equal(calls.length, 1);
+  const receipt = await (await fetch(base + '/v1/requests/request-1', { headers: auth })).json();
+  assert.equal(receipt.state, 'accepted');
+  assert.equal(JSON.stringify(receipt).includes('TEST-SECRET'), false);
+  assert.equal((await fetch(base + '/v1/send', { method: 'POST', headers: auth, body: 'null' })).status, 400);
+  bridge.ingest({ msgs: [{ message_id: '123', from_user_id: 'owner', item_list: [] }], get_updates_buf: 'c' });
+  const inbox = await (await fetch(base + '/v1/events?wait=0s&lease=30m', { headers: auth })).json();
+  assert.equal(inbox.events.length, 1);
+  const acked = await (await fetch(base + '/v1/events/ack', { method: 'POST', headers: auth, body: JSON.stringify({ event_ids: ['muse:123'] }) })).json();
+  assert.equal(acked.acked, 1);
+  assert.equal((await fetch(base + '/v1/events?limit=oops', { headers: auth })).status, 400);
+});

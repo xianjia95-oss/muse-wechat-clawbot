@@ -1,0 +1,292 @@
+import { createHash, randomUUID } from 'node:crypto';
+import { EventEmitter } from 'node:events';
+import { performance } from 'node:perf_hooks';
+import { setTimeout as pause } from 'node:timers/promises';
+import { BridgeError, fail, integer } from './errors.mjs';
+import { VERSION } from './config.mjs';
+import { normalizeMedia, prepareMedia, snapshotAvailable, removeSnapshot } from './media.mjs';
+
+const hash = (value) => createHash('sha256').update(value).digest('hex');
+const ms = (value) => Math.round(value * 100) / 100;
+export const splitText = (text) => {
+  const chars = Array.from(text);
+  const chunks = [];
+  for (let index = 0; index < chars.length; index += 2000) chunks.push(chars.slice(index, index + 2000).join(''));
+  return chunks;
+};
+
+export class Bridge {
+  constructor(config, store, ilink, log = () => {}) {
+    this.config = config;
+    this.store = store;
+    this.ilink = ilink;
+    this.log = log;
+    this.inflight = new Map();
+    this.peerTails = new Map();
+    this.events = new EventEmitter();
+    this.events.setMaxListeners(100);
+    this.poll = { state: 'stopped', last_ok_at: null, error: null };
+    this.controller = new AbortController();
+  }
+  allowed(wxid) {
+    const allow = this.config.allow_wxids;
+    return allow.length ? allow.includes(wxid) : wxid === this.store.get('session')?.ilink_user_id;
+  }
+  status() {
+    const session = this.store.get('session');
+    return {
+      binding: this.config.binding,
+      version: VERSION,
+      capabilities: { send: ['text', 'image', 'video'], receive: ['text', 'voice_transcript'] },
+      logged_in: !!session && !this.store.get('expired', false),
+      poll: this.poll,
+      ready_events: this.store.count(),
+      inflight_sends: this.inflight.size,
+      transport: 'direct-send / dedicated-send-and-poll-pools',
+    };
+  }
+  validateSend(body) {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) fail('invalid_body', 'JSON object required.');
+    if (body.binding !== undefined && body.binding !== this.config.binding) fail('unknown_binding', 'Unknown binding.', 404);
+    if (typeof body.to !== 'string' || !body.to || body.to.length > 256) fail('invalid_to', 'to is required.');
+    const media = normalizeMedia(body.media);
+    const text = body.text ?? '';
+    if (typeof text !== 'string' || (!text.trim() && !media.length)) fail('invalid_text', 'Nonempty text or media is required.');
+    if (Array.from(text).length > 32000) fail('text_too_long', 'Maximum reply is 32000 Unicode code points.', 413);
+    if (['image', 'file', 'video'].some((key) => body[key] !== undefined)) fail('unsupported_media', 'Use media: [{type: image/video, path: absolute_local_path}]. Files are not supported.');
+    if (typeof body.request_id !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(body.request_id)) fail('invalid_request_id', 'request_id is required (1..128 letters, digits, _, ., :, -).');
+    if (body.model_ready_at !== undefined && (!Number.isSafeInteger(body.model_ready_at) || body.model_ready_at < 0 || body.model_ready_at > Date.now() + 5000)) {
+      fail('invalid_ready_time', 'model_ready_at must be an epoch-millisecond timestamp, not in the future.');
+    }
+    if (!this.allowed(body.to)) fail('forbidden', 'Recipient is outside the allowlist.', 403);
+    return { ...body, text, media };
+  }
+
+  // The response is only successful after WeChat has accepted every chunk.
+  // No timer, scheduled flush, receive-loop wait, or process-per-chunk execution.
+  send(body) {
+    body = this.validateSend(body);
+    // Preserve v0.2 text fingerprints. Media IDs bind the supplied paths to the
+    // first prepared snapshots; retries never substitute changed file bytes.
+    const fingerprint = hash(JSON.stringify(body.media.length ? [body.to, body.text, body.media] : [body.to, body.text]));
+    const prior = this.store.send(body.request_id);
+    if (prior && prior.fingerprint !== fingerprint) fail('id_conflict', 'request_id already belongs to another payload.', 409);
+    if (this.inflight.has(body.request_id)) return this.inflight.get(body.request_id);
+    if (prior?.state === 'accepted') return Promise.resolve({ ...prior.result, cached: true });
+    if (prior && ['unknown', 'rejected'].includes(prior.state)) {
+      fail(prior.state === 'unknown' ? 'send_unknown' : 'send_rejected', 'Previous outcome must be reviewed; this request will not be resent.', 409, { request: prior.result, state: prior.state });
+    }
+    const session = this.store.get('session');
+    if (!session || this.store.get('expired', false)) fail('not_logged_in', '请先扫码登录，并启动或重启 muse-link。', 401);
+    if (!this.store.context(body.to)) fail('no_context', '请先用微信给 ClawBot 发一条消息。', 409);
+    const chunks = [
+      ...splitText(body.text.trim() ? body.text : '').map((text) => ({ type: 'text', text })),
+      ...body.media,
+    ];
+    if (!prior) this.store.createSend(body.request_id, fingerprint, body.to,
+      chunks.map((_, index) => `ml-${hash(`${body.request_id}:${index}`).slice(0, 32)}`));
+    else if (prior.state === 'failed') this.store.retrySend(body.request_id);
+    const began = performance.now();
+    const submittedAt = Date.now();
+    const previous = this.peerTails.get(body.to) ?? Promise.resolve();
+    const work = previous.catch(() => {}).then(() => this.deliver(body, chunks, began, submittedAt));
+    this.peerTails.set(body.to, work);
+    this.inflight.set(body.request_id, work);
+    const clean = () => {
+      this.inflight.delete(body.request_id);
+      if (this.peerTails.get(body.to) === work) this.peerTails.delete(body.to);
+    };
+    work.then(clean, clean);
+    return work;
+  }
+
+  async deliver(body, chunks, began, submittedAt) {
+    const queueMs = performance.now() - began;
+    let firstChunkMs = null;
+    let upstreamMs = 0;
+    let prepareMs = 0;
+    let uploadMs = 0;
+    let sendMs = 0;
+    const parts = this.store.parts(body.request_id);
+    let accepted = parts.filter((part) => part.state === 'accepted').length;
+    const timing = () => ({
+      queue_ms: ms(queueMs), upstream_ms: ms(upstreamMs),
+      media_prepare_ms: ms(prepareMs), media_upload_ms: ms(uploadMs), send_message_ms: ms(sendMs),
+      first_chunk_ms: firstChunkMs === null ? null : ms(firstChunkMs),
+      bridge_ms: ms(performance.now() - began),
+      model_to_submit_ms: body.model_ready_at === undefined ? null : submittedAt - body.model_ready_at,
+    });
+    const failDelivery = (error, phase, part) => {
+      const rejected = ['session_expired', 'upstream_rejected'].includes(error.code);
+      const state = phase === 'send' ? (rejected ? 'rejected' : 'unknown') : (rejected ? 'rejected' : 'failed');
+      if (error.code === 'session_expired') this.store.set('expired', true);
+      if (part) this.store.partState(body.request_id, part.part, state === 'failed' ? 'prepared' : state);
+      const code = error instanceof BridgeError ? error.code : phase === 'prepare' ? 'media_prepare_failed' : phase === 'upload' ? 'media_upload_failed' : 'upstream_unknown';
+      const result = { ok: false, request_id: body.request_id, state, phase, retryable: state === 'failed',
+        accepted_chunks: accepted, total_chunks: chunks.length, accepted_parts: accepted, total_parts: chunks.length, error: code, timing: timing() };
+      this.store.finish(body.request_id, state, result);
+      this.log('send_failed', result);
+      throw new BridgeError(code, error instanceof BridgeError ? error.message : 'Sending failed; inspect request status before retrying.', error.status ?? 502, result);
+    };
+    if (parts.some((part) => ['unknown', 'sending'].includes(part.state))) {
+      const result = { ok: false, request_id: body.request_id, state: 'unknown', retryable: false, accepted_chunks: accepted, total_chunks: chunks.length, timing: timing() };
+      this.store.finish(body.request_id, 'unknown', result);
+      fail('send_unknown', '上次发送中断，微信是否收到尚不确定，已停止自动重发。', 409, result);
+    }
+    // Validate and snapshot all attachments before sending even the caption.
+    const preparing = performance.now();
+    try {
+      for (const part of parts) {
+        if (part.state === 'accepted' || chunks[part.part].type === 'text') continue;
+        const record = this.store.media(body.request_id, part.part);
+        if (!record) this.store.saveMedia(body.request_id, part.part, await prepareMedia(this.config, body.request_id, part.part, chunks[part.part]));
+        else if (!record.media_item && !await snapshotAvailable(this.config, body.request_id, record)) fail('media_snapshot_missing', 'Prepared media snapshot is unavailable. Do not replace its bytes under this request ID.');
+      }
+    } catch (error) {
+      prepareMs = performance.now() - preparing;
+      failDelivery(error, 'prepare');
+    }
+    prepareMs = body.media.length ? performance.now() - preparing : 0;
+    for (const part of parts) {
+      if (part.state === 'accepted') continue;
+      if (this.store.get('expired', false)) failDelivery(new BridgeError('session_expired', '微信登录已过期，请重新扫码。', 401), 'send', part);
+      const chunk = chunks[part.part];
+      let record;
+      if (chunk.type !== 'text') {
+        record = this.store.media(body.request_id, part.part);
+        if (!record.media_item) {
+          const uploading = performance.now();
+          try {
+            record.media_item = await this.ilink.uploadMedia(this.store.get('session'), body.to, record);
+            this.store.saveMedia(body.request_id, part.part, record);
+          } catch (error) {
+            const elapsed = performance.now() - uploading;
+            uploadMs += elapsed; upstreamMs += elapsed;
+            failDelivery(error, 'upload', part);
+          }
+          const elapsed = performance.now() - uploading;
+          uploadMs += elapsed; upstreamMs += elapsed;
+        }
+      }
+      const started = performance.now();
+      this.store.partState(body.request_id, part.part, 'sending');
+      try {
+        if (chunk.type === 'text') await this.ilink.sendText(this.store.get('session'), body.to, chunk.text, this.store.context(body.to), part.client_id);
+        else await this.ilink.sendMedia(this.store.get('session'), body.to, record.media_item, this.store.context(body.to), part.client_id);
+      } catch (error) {
+        const elapsed = performance.now() - started;
+        upstreamMs += elapsed; sendMs += elapsed;
+        failDelivery(error, 'send', part);
+      }
+      const elapsed = performance.now() - started;
+      upstreamMs += elapsed; sendMs += elapsed;
+      accepted++;
+      this.store.partState(body.request_id, part.part, 'accepted', ms(elapsed));
+      firstChunkMs ??= performance.now() - began;
+      this.log('chunk_accepted', { request_id: body.request_id, chunk: part.part + 1, upstream_ms: ms(elapsed) });
+      if (record) {
+        try {
+          await removeSnapshot(this.config, body.request_id, record);
+          this.store.deleteMedia(body.request_id, part.part);
+        } catch { this.log('media_cleanup_failed', { request_id: body.request_id, part: part.part }); }
+      }
+    }
+    const result = { ok: true, request_id: body.request_id, state: 'accepted', accepted_chunks: accepted, total_chunks: chunks.length,
+      accepted_parts: accepted, total_parts: chunks.length, media_count: body.media.length, accepted_at: new Date().toISOString(), timing: timing() };
+    this.store.finish(body.request_id, 'accepted', result);
+    this.log('send_accepted', result);
+    return result;
+  }
+
+  alert(code, message) {
+    const event = {
+      schema: 'muselink.event.v1', binding: this.config.binding, event_id: `${this.config.binding}:alert:${randomUUID()}`,
+      kind: 'alert', text: '', media: [], alert: { code, message }, create_time: Math.floor(Date.now() / 1000),
+    };
+    this.store.addEvent(event);
+    this.events.emit('new');
+  }
+  ingest(response) {
+    let added = 0;
+    this.store.transaction(() => {
+      for (const message of response.msgs ?? []) {
+        if (!message.from_user_id || !this.allowed(message.from_user_id)) continue;
+        if (message.message_id === undefined) throw new Error('Message is missing message_id');
+        if (message.context_token) this.store.saveContext(message.from_user_id, message.context_token);
+        const items = message.item_list ?? [];
+        const unsupported = items.filter((item) => item.type !== 1 && !(item.type === 3 && item.voice_item?.text));
+        const event = {
+          schema: 'muselink.event.v1', event_id: `${this.config.binding}:${message.message_id}`,
+          binding: this.config.binding, kind: 'message', message_id: String(message.message_id),
+          from_wxid: message.from_user_id, to_bot_id: message.to_user_id ?? '',
+          create_time: Math.floor((message.create_time_ms ?? Date.now()) / 1000),
+          received_at: new Date().toISOString(),
+          text: items.filter((item) => item.type === 1).map((item) => item.text_item?.text ?? '').join('\n'),
+          voice_text: items.filter((item) => item.type === 3).map((item) => item.voice_item?.text ?? '').filter(Boolean).join('\n'),
+          media: [], media_errors: unsupported.map((item) => `当前版本尚不支持读取微信入站附件类型 ${item.type}，请在 Muse 聊天中提供附件。`),
+          has_context_token: !!this.store.context(message.from_user_id),
+        };
+        added += this.store.addEvent(event);
+      }
+      // Events, tokens and cursor commit together; a failed batch is replayable.
+      if (response.get_updates_buf !== undefined) this.store.set('cursor', response.get_updates_buf);
+    });
+    if (added) this.events.emit('new');
+    return added;
+  }
+  async runPoll() {
+    if (!this.store.get('session')) { this.poll = { ...this.poll, state: 'not_logged_in' }; return; }
+    let failures = 0;
+    let firstFailure = null;
+    let alerted = false;
+    while (!this.controller.signal.aborted && !this.store.get('expired', false)) {
+      this.poll = { ...this.poll, state: 'waiting' };
+      try {
+        const response = await this.ilink.updates(this.store.get('session'), this.store.get('cursor', ''), this.controller.signal);
+        this.ingest(response);
+        this.poll = { state: 'ok', last_ok_at: new Date().toISOString(), error: null };
+        if (alerted) this.alert('recovered', '微信连接已恢复。');
+        failures = 0; firstFailure = null; alerted = false;
+      } catch (error) {
+        if (this.controller.signal.aborted) break;
+        this.poll = { ...this.poll, state: 'failing', error: error.code ?? 'poll_error' };
+        if (error.code === 'session_expired') {
+          this.store.set('expired', true);
+          this.poll.state = 'expired';
+          this.alert('session_expired', '微信登录过期，需要重新扫码并重启 muse-link。');
+          break;
+        }
+        firstFailure ??= Date.now();
+        if (!alerted && Date.now() - firstFailure > 30000) {
+          this.alert('unreachable', '微信桥连接连续失败超过 30 秒，请检查网络和服务代理设置。');
+          alerted = true;
+        }
+        this.log('poll_error', { code: error.code ?? 'poll_error' });
+        await pause(Math.min(10000, 500 * 2 ** Math.min(failures++, 5)), undefined, { signal: this.controller.signal }).catch(() => {});
+      }
+    }
+    if (this.store.get('expired', false)) this.poll.state = 'expired';
+  }
+  async claim({ limit = 20, lease = 1800000, wait = 0 } = {}, signal) {
+    integer(limit, 1, 100, 'limit');
+    integer(lease, 1000, 3600000, 'lease');
+    integer(wait, 0, 60000, 'wait');
+    const deadline = Date.now() + wait;
+    for (;;) {
+      const events = this.store.claim(limit, lease);
+      if (events.length || Date.now() >= deadline || signal?.aborted) return events;
+      await new Promise((resolve) => {
+        const done = () => { clearTimeout(timer); this.events.off('new', done); signal?.removeEventListener('abort', done); resolve(); };
+        const timer = setTimeout(done, Math.min(250, deadline - Date.now()));
+        this.events.once('new', done);
+        signal?.addEventListener('abort', done, { once: true });
+      });
+    }
+  }
+  async close() {
+    this.controller.abort();
+    await this.pollTask;
+    await Promise.allSettled(this.inflight.values());
+    await this.ilink.close();
+  }
+}

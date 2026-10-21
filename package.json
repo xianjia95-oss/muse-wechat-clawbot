@@ -1,0 +1,26 @@
+{
+  "name": "muse-link",
+  "version": "0.3.0",
+  "description": "Meta Muse to WeChat ClawBot bridge with task routing, reply completion and latency measurements",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/xianjia95-oss/muse-wechat-clawbot.git"
+  },
+  "homepage": "https://github.com/xianjia95-oss/muse-wechat-clawbot#readme",
+  "bugs": { "url": "https://github.com/xianjia95-oss/muse-wechat-clawbot/issues" },
+  "engines": { "node": ">=24.0.0" },
+  "bin": { "muse-link": "src/cli.mjs" },
+  "scripts": {
+    "start": "node src/cli.mjs run",
+    "test": "node --test test/*.test.mjs",
+    "benchmark": "node scripts/benchmark.mjs",
+    "demo": "node scripts/demo.mjs"
+  },
+  "dependencies": {
+    "qrcode": "1.5.4",
+    "undici": "8.12.3"
+  }
+}
