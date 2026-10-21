@@ -4,7 +4,16 @@ import { dirname, join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { fail, integer } from './errors.mjs';
 
-export const VERSION = '0.3.0';
+export const VERSION = '0.4.0-rc.1';
+export const OPS_DEFAULTS = Object.freeze({
+  max_inflight_sends: 64, max_peer_sends: 16, max_pending_events: 2000,
+  min_free_bytes: 128 * 1024 * 1024, max_state_bytes: 1024 * 1024 * 1024,
+  max_outbox_bytes: 512 * 1024 * 1024, max_http_requests: 128,
+  backlog_warn_ms: 300000, poll_stale_ms: 120000,
+  event_retention_days: 7, send_retention_days: 90, failed_media_retention_days: 7,
+  maintenance_interval_ms: 3600000, shutdown_timeout_ms: 180000,
+});
+export const operational = (config) => ({ ...OPS_DEFAULTS, ...config.operations });
 
 export const defaultConfigPath = () => join(homedir(), '.config', 'muse-link', 'config.json');
 export const expand = (path) => resolve(path.startsWith('~/') ? join(homedir(), path.slice(2)) : path);
@@ -29,6 +38,8 @@ export function initConfig(path = defaultConfigPath()) {
     poll_timeout_ms: 45000,
     media_timeout_ms: 120000,
     media_roots: ['~/workspace'],
+    require_lease_token: true,
+    operations: { ...OPS_DEFAULTS },
   });
   return { path, created: true };
 }
@@ -48,6 +59,18 @@ export function loadConfig(path = defaultConfigPath()) {
   integer(config.media_timeout_ms, 1000, 600000, 'media_timeout_ms');
   if (!Array.isArray(config.media_roots) || config.media_roots.some((root) => typeof root !== 'string' || !root)) fail('invalid_config', 'media_roots must contain local directories.');
   config.media_roots = config.media_roots.map(expand);
+  config.require_lease_token ??= true;
+  if (typeof config.require_lease_token !== 'boolean') fail('invalid_config', 'require_lease_token must be boolean.');
+  if (config.operations !== undefined && (!config.operations || typeof config.operations !== 'object' || Array.isArray(config.operations))) fail('invalid_config', 'operations must be an object.');
+  for (const key of Object.keys(config.operations ?? {})) if (!(key in OPS_DEFAULTS)) fail('invalid_config', `Unknown operations option: ${key}`);
+  config.operations = operational(config);
+  for (const [key, value] of Object.entries(config.operations)) integer(value, 1, Number.MAX_SAFE_INTEGER, `operations.${key}`);
+  if (config.operations.event_retention_days > config.operations.send_retention_days) fail('invalid_config', 'send retention must cover event retention.');
+  integer(config.operations.shutdown_timeout_ms, 1000, 1800000, 'shutdown_timeout_ms');
+  integer(config.operations.maintenance_interval_ms, 1000, 86400000, 'maintenance_interval_ms');
+  for (const key of ['event_retention_days', 'send_retention_days', 'failed_media_retention_days']) integer(config.operations[key], 1, 36500, key);
+  for (const key of ['max_http_requests', 'max_inflight_sends', 'max_peer_sends']) integer(config.operations[key], 1, 4096, key);
+  if (config.operations.max_outbox_bytes >= config.operations.max_state_bytes) fail('invalid_config', 'max_state_bytes must exceed max_outbox_bytes.');
   if (typeof config.state_dir !== 'string' || !config.state_dir) fail('invalid_config', 'state_dir is required.');
   config.state_dir = expand(config.state_dir);
   config.path = resolve(path);

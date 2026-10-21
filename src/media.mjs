@@ -42,7 +42,7 @@ export function mediaDirectory(config, requestId) {
 
 // Stream a bounded, encrypted snapshot to disk; large videos are never read
 // into one buffer. The first successfully prepared snapshot is bound to the ID.
-export async function prepareMedia(config, requestId, part, descriptor) {
+export async function prepareMedia(config, requestId, part, descriptor, reserve = () => () => {}) {
   const roots = config.media_roots ?? [join(homedir(), 'workspace')];
   let source;
   try { source = await realpath(descriptor.path); } catch { fail('media_file_missing', 'Media file is missing or unreadable.'); }
@@ -54,10 +54,12 @@ export async function prepareMedia(config, requestId, part, descriptor) {
   const directory = mediaDirectory(config, requestId);
   const path = join(directory, `${part}.bin`);
   const temp = join(directory, `${part}-${randomUUID()}.tmp`);
+  let release;
   try {
     const before = await file.stat();
     if (!before.isFile()) fail('invalid_media_file', 'Media path must be a regular file.');
     if (before.size <= 0 || before.size > MEDIA_LIMITS[descriptor.type]) fail('media_too_large', 'Media is empty or exceeds the local limit (image 20 MiB; video 50 MiB).', 413);
+    release = reserve((Math.floor(before.size / 16) + 1) * 16);
     await mkdir(directory, { recursive: true, mode: 0o700 });
     const key = randomBytes(16);
     const md5 = createHash('md5');
@@ -66,6 +68,7 @@ export async function prepareMedia(config, requestId, part, descriptor) {
     let head = Buffer.alloc(0);
     const inspect = new Transform({ transform(chunk, encoding, done) {
       size += chunk.length;
+      if (size > before.size) { done(new BridgeError('media_changed', 'Media grew while preparing.')); return; }
       if (size > MEDIA_LIMITS[descriptor.type]) { done(new BridgeError('media_too_large', 'Media grew beyond the local size limit.', 413)); return; }
       if (head.length < 64) head = Buffer.concat([head, chunk.subarray(0, 64 - head.length)]);
       md5.update(chunk); sha256.update(chunk);
@@ -79,8 +82,7 @@ export async function prepareMedia(config, requestId, part, descriptor) {
     return { type: descriptor.type, cipher_path: path, raw_size: size, cipher_size: (Math.floor(size / 16) + 1) * 16,
       raw_md5: md5.digest('hex'), sha256: sha256.digest('hex'), key_hex: key.toString('hex'), filekey: randomBytes(16).toString('hex') };
   } finally {
-    await file.close();
-    await rm(temp, { force: true });
+    try { await file.close(); await rm(temp, { force: true }); } finally { release?.(); }
   }
 }
 

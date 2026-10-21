@@ -6,6 +6,22 @@ import { encryptedStream, mediaItem } from './media.mjs';
 const BASE_INFO = { channel_version: '2.4.10', bot_agent: 'OpenClaw' };
 export const AUTH_BASE = 'https://ilinkai.weixin.qq.com';
 const ID_FIELDS = new Set(['message_id', 'seq', 'msg_id']);
+const MAX_JSON_BYTES = 4 * 1024 * 1024;
+async function boundedJsonText(body) {
+  // Real Undici responses stream; the fallback supports injected test doubles.
+  if (!body[Symbol.asyncIterator]) {
+    const text = await body.text();
+    if (Buffer.byteLength(text) > MAX_JSON_BYTES) fail('upstream_response_too_large', 'WeChat JSON response exceeds the local 4 MiB budget.', 502);
+    return text;
+  }
+  let size = 0; const chunks = [];
+  for await (const chunk of body) {
+    size += chunk.length;
+    if (size > MAX_JSON_BYTES) fail('upstream_response_too_large', 'WeChat JSON response exceeds the local 4 MiB budget.', 502);
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
 
 export function parseWire(text) {
   return JSON.parse(text, (key, value, context) => ID_FIELDS.has(key) && typeof value === 'number' ? context.source : value);
@@ -76,7 +92,7 @@ export class Ilink {
         signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
         maxRedirections: 0,
       });
-      const text = await response.body.text();
+      const text = await boundedJsonText(response.body);
       if (response.statusCode !== 200) throw new BridgeError('upstream_http', `WeChat HTTP ${response.statusCode}`, 502);
       const parsed = text.trim() ? parseWire(text) : {};
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Invalid iLink response');

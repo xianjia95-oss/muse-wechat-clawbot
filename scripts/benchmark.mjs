@@ -13,7 +13,7 @@ import { createApi } from '../src/server.mjs';
 
 process.umask(0o077);
 const temp = mkdtempSync(join(tmpdir(), 'muse-link-bench-'));
-const config = { binding: 'muse', allow_wxids: [], api_token: 'test-only-token-'.repeat(4), send_timeout_ms: 2000, poll_timeout_ms: 120000 };
+const config = { binding: 'muse', state_dir: temp, allow_wxids: [], api_token: 'test-only-token-'.repeat(4), send_timeout_ms: 2000, poll_timeout_ms: 120000 };
 const store = new Store(temp);
 store.set('session', { bot_token: 'FAKE', base_url: 'https://ilinkai.weixin.qq.com', ilink_bot_id: 'test', ilink_user_id: 'owner' });
 store.saveContext('owner', 'FAKE');

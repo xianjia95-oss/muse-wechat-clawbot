@@ -1,6 +1,6 @@
 # 在 Meta Muse 云端部署
 
-独立程序 Muse Link v0.3.0，将 Meta Muse 对接微信 ClawBot。需要 Muse 自己的 Linux、Node.js 24+ / npm、运行中的 systemd、服务安装权限和 Muse hooks。文字与图片/视频回传的实际账号收取仍待验证。Muse 使用自身的任务能力处理消息，本项目不调用或替换其模型。
+独立程序 Muse Link v0.4.0-rc.1，将 Meta Muse 对接微信 ClawBot。需要 Muse 自己的 Linux、Node.js 24+ / npm、运行中的 systemd、服务安装权限和 Muse hooks。文字与图片/视频回传的实际账号收取仍待验证。Muse 使用自身的任务能力处理消息，本项目不调用或替换其模型。
 
 先请用户在微信“我 → 设置 → 插件”确认并启用 ClawBot。部署使用 Muse 自己的云端，不要求额外公网 IP；云实例必须能持续运行桥、访问腾讯 HTTPS 接口并注册平台原生 hooks。
 
@@ -24,16 +24,16 @@ export PATH="$HOME/.local/bin:$PATH"
 
 Windows 可从源代码执行 npm ci、node src/cli.mjs init、node src/cli.mjs login、npm start；systemd 安装器用于 Muse 云端。
 
-## 从 Muse Link v0.2.x 升级
+## 从 Muse Link v0.2.x / v0.3.x 升级
 
-完成已领取的任务或持久化交接进度，暂停现有微信 hook。停止 muse-link 服务后，从 v0.3.0 新解压目录运行安装器，保留原配置、登录和 SQLite 状态，不删除数据库：
+完成已领取的任务或持久化交接进度，暂停现有微信 hook。停止 muse-link 服务后，从 v0.4.0-rc.1 新解压目录运行安装器，保留原配置、登录和 SQLite 状态，不删除数据库：
 
 ```bash
 systemctl stop muse-link
 bash deploy/install.sh
 ```
 
-普通用户为 systemctl 加 sudo -n。安装器保留配置，已有配置缺少 media_roots 时默认 ~/workspace；按 [媒体说明](MEDIA.md) 把生成工具实际输出目录合并到配置，再按下方步骤启动服务。更新旧 hook 中的纯文字限制，重新 dry_run 并启用。muse-link status 必须显示 version=0.3.0、capabilities.send 含 image/video，不能只根据新 CLI 的版本判断后台升级成功。已有会话健康时无需重新扫码。可直接使用 [升级指令](给Muse升级的指令.txt)。
+普通用户为 systemctl 加 sudo -n。安装器会先离线备份、将候选版装入 releases，再切换 current，保留上一版供回滚。同步按本页更新 worker 的 lease_token、renew 和 checkpoint；旧配置也默认要求 token。详见 [生产运维](PRODUCTION.md)。安装器保留配置，已有配置缺少 media_roots 时默认 ~/workspace；按 [媒体说明](MEDIA.md) 把生成工具实际输出目录合并到配置，再按下方步骤启动服务。更新旧 hook 中的纯文字限制，重新 dry_run 并启用。muse-link status 必须显示 version=0.4.0-rc.1、capabilities.send 含 image/video，不能只根据新 CLI 的版本判断后台升级成功。已有会话健康时无需重新扫码。可直接使用 [升级指令](给Muse升级的指令.txt)。
 
 ## 扫码
 
@@ -78,26 +78,34 @@ muse-link health
 
 脚本 `~/hooks/scripts/muse-link-wechat.sh`，建议 poll_interval_secs=5，以实际平台支持为准并记录生效值。Muse 必须把 wake/silent 输出适配成平台实际协议，先 dry_run 再 enable；dry_run 不得 pull。记录真实 hook 标识、启用状态、检测间隔和 worker 工具权限。更新或替换旧 hook，不要两套同时运行。把下面全部写入新 hook 的任务指令：
 
-1. 原因为“Muse 微信桥异常”：检查 muse-link status、health 和 systemd 日志，在 Muse 聊天用中文报告原因和建议。不要擅自启动可能被用户主动停止的服务。
-2. 原因为“微信有 N 条新事件”：`muse-link muse next --lease 30m`，读取 tasks，按 event_id 去重，持久化任务进度。若 completion.state=unknown/rejected，不得重新执行整个任务或换 ID 发送；先根据 completion.result 核对并报告。failed 且 retryable=true 表示文件准备或上传失败，按原任务进度修复原因，再用原文字和媒体路径续传，跳过已确认消息，不重做生成任务。
-3. kind=alert：在 Muse 聊天报告 alert.message，不回微信，然后 `muse-link muse ack '<event_id>'`。
-4. 普通事件读取 text、voice_text；需要工具的请求必须交由真实 Muse worker 调用所需工具，不能以固定回复或概述冒充执行。media_errors 非空必须说明附件暂不支持，请用户直接在 Muse 提供，不能声称已读取。三者都为空的事件忽略后 ack。
-5. **回复准备好后，下一步立即执行发送，再写 Muse 内的完成说明。** 不要只在 Muse 聊天写结果，等另一轮 hook 或定时任务转发。
-6. 使用事件编号，桥自动选择微信收件人和固定的最终回复编号，重试时文字及媒体类型/路径必须一致。纯文字示例：
+1. 异常唤醒时检查 status、health 和 systemd 日志，在 Muse 聊天报告，不擅自重启用户主动停止的服务。有待处理事件时继续排空，不能因为 backlog 告警就永远不领取任务。
+2. 执行 `muse-link muse next --limit 1 --lease 30m`，保存真实 event_id、lease_token、lease_until、execution 和 completion。默认单个领取，避免领取大量任务却未及时处理。每 5 分钟用 `muse-link muse renew '<event_id>' --lease-token '<lease_token>' --lease 30m` 续租；续租失败停止后续操作，不改用过期 token。
+3. completion.state=unknown/rejected：先核对请求和手机，不重做任务或换 ID 发送。failed 且 retryable=true：恢复原进度和生成文件，修复原因后用原文字/路径续传，跳过已确认消息。不要重新生成整个结果。execution.needs_review=true 或存在 started 步骤时，核对外部系统、旧 worker 与工具结果，不能自动重复执行。
+4. kind=alert：只在 Muse 聊天报告，再使用当前 token ack。普通事件读取 text、voice_text；media_errors 必须如实说明，不声称已读取入站附件。空事件可记录忽略原因后 ack。
+5. 需要工具时使用真实 Muse 工具权限。对会修改外部状态、耗时昂贵或不应重复的操作，先以稳定 step 名写 started，成功后写 completed 和可恢复结果。示例（替换为本任务真实值）：
 
    ```bash
-   muse-link muse reply '<event_id>' --text - <<'MUSE_REPLY'
+   muse-link muse checkpoint '<event_id>' --lease-token '<lease_token>' --step generate-result --phase started
+   # 仅在 started 成功且未返回 cached 时，调用真正的 Muse 工具。
+   muse-link muse checkpoint '<event_id>' --lease-token '<lease_token>' --step generate-result --phase completed --text - <<'TOOL_RESULT'
+   工具结果或持久化结果文件路径
+   TOOL_RESULT
+   ```
+
+   completed 返回 cached 时复用其 result，不再执行工具。中断后遗留 started 时停止并核对；确认外部结果后，用当前 token、同一 step、--phase completed --reviewed 写核对结果。核对不能用猜测替代。日志只能防止盲目重做，不能与外部系统组成事务，也不能停止已经执行中的旧工具；外部操作仍需自己的幂等键。
+6. 结果准备好后立即提交微信，再写 Muse 的完成说明，不等下一轮 hook。最终回复自动路由并生成稳定 request_id，须带当前 token：
+
+   ```bash
+   muse-link muse reply '<event_id>' --lease-token '<lease_token>' --text - <<'MUSE_REPLY'
    回复正文
    MUSE_REPLY
    ```
 
-   换成事件真实值。heredoc 分隔符加引号，选不会出现在正文中的值。不要把用户文本拼成 shell 代码。长任务先用同一 reply 命令加 `--progress --reply-id started` 发简短确认，进度回复不会结束任务；每条不同的进度要用稳定且不同的 reply-id。租约可提高到 1 小时并持久化进度。
-
-   需要回传生成图片/视频时，先用真实 Muse 工具生成原文件，导出到 config.media_roots 允许目录，再在同一最终 reply 加 `--image '/absolute/result.png'` 或 `--video '/absolute/result.mp4'`。最多 4 个媒体，可省略文字；图片 20 MiB、视频 50 MiB，本包不转码。可在最终命令同时传所有媒体和文字，不能先最终回复文字结束事件再补图。进度预览也可带 --progress --reply-id preview。只有 URL 或内部媒体 ID 时，先导出文件，不能把链接作为路径。详见 [媒体说明](MEDIA.md)。
-
-7. state=accepted 代表微信接口确认，不代表手机已显示或视频能播放。调用中断先 `muse-link request '<request_id>'` 核对。unknown、rejected 或部分成功在 Muse 聊天报告，不能换新 ID 盲目重发。failed、retryable=true 可用原请求显式续传；持续失败时报告并保留任务，不无限循环。需要用户决定的重发先说明已成功消息数和不确定部分。
-8. 能准确记录任务结果就绪时间时，可附 `--ready-at '<ISO 时间>'`，否则省略，不能把工具调用时间冒充生成时间。
-9. 最终 reply 成功后程序自动 ack；不需再手动确认。忽略空事件、无需回复或已向用户报告并持久化交接的失败，用 `muse-link muse ack '<event_id>'` 确认。未完成不提前 ack；租约过期会重投，恢复时检查去重记录。程序会自动清理已经成功发完最终回复、但上次来不及 ack 的事件。
+   事件和 token 使用领取结果，不能照抄占位符。用带引号的 heredoc 和不会出现在正文中的分隔符，不把用户文字拼进 shell。长任务先用同一 reply 命令加 `--progress --reply-id started` 发简短确认；每条进度有稳定 reply-id，不结束任务。
+7. 生成图片/视频后，用真实工具导出完整本地文件到 media_roots，在同一最终 reply 加 `--image '/absolute/result.png'`、`--video '/absolute/result.mp4'`。最多 4 个媒体，可省略文字；图片 20 MiB、视频 50 MiB，本包不转码。只有 URL/媒体 ID 时先导出文件。不要先最终回复文字结束任务再补图；预览用 --progress --reply-id preview。PrivateTmp 下跨进程文件应放持久化 workspace，详见 MEDIA.md。
+8. accepted 只代表微信 API 确认，不代表手机显示/播放。调用中断先 `muse-link request '<request_id>'`；unknown 不自动重发，核对后可用 review 记录处置，但不会变成可重发。429/503/507 先检查状态，修复或等待后使用同 ID/内容重试。failed 可安全续传的情况不重做生成；持续失败要报告并保留交接记录。
+9. 最终 reply 成功自动 ack。告警、空事件、无需回复或核对后结清的事件，用 `muse-link muse ack '<event_id>' --lease-token '<lease_token>'`；未完成工具步骤不能 ack。未完成不提前确认，持久化业务结果/文件路径以备恢复。可准确记录结果就绪时间时才使用 --ready-at，不能把发送调用时刻冒充模型完成时刻。
+10. restore_review_required 时停止，不绕过闸门；按照 PRODUCTION.md 核对恢复后可能重复的微信和工具动作。72 小时验收按“给Muse生产验收的指令.txt”，保留脱敏证据。
 
 ## 验收
 

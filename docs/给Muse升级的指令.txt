@@ -1,13 +1,13 @@
-请把当前微信桥 Muse Link 从 v0.2.1 升级到上传的 v0.3.0，增加“你生成图片或视频后，直接回传当前微信”的能力。保留原账号、token、配置、SQLite 收件箱与发送记录；已有会话健康时无需重新扫码。
+请把现有 Muse Link 升级到上传的 v0.4.0-rc.1 生产加固候选版。保留微信账号、token、原配置、SQLite 和生成文件，健康会话无需重新扫码。不把候选版称为已通过生产验收。
 
-先读包内 docs/MUSE.md 的升级步骤、docs/MEDIA.md 和 docs/API.md。处理完已领取任务或持久化进度后，暂停原生微信 hook，停止 muse-link 服务，再从新解压目录执行 bash deploy/install.sh。只保留一套接收进程，不删除或重建旧数据库。
+先读 docs/PRODUCTION.md、docs/MUSE.md、docs/API.md。处理完已领取任务或记录交接后，暂停原生微信 hook、停止 muse-link 服务，再从新解压目录 bash deploy/install.sh。安装器先把依赖装入候选 releases 目录，离线备份原状态后切换 current，保留 previous；不自动启动服务。不运行两套同账号轮询，不导入或删除原 Muse Link 数据库。
 
-将你生成工具实际输出目录加入 ~/.config/muse-link/config.json 的 media_roots，保留其他字段；默认只允许 ~/workspace。文件必须在你云端、已完整生成并能由服务用户读取；如果生成工具只返回媒体 ID、预览或 URL，先通过实际 Muse 工具导出原文件。图片支持 PNG/JPEG/GIF/WebP，单张 20 MiB；视频支持 MP4/MOV 容器，单个 50 MiB，不转码，优先 H.264/AAC MP4。
+同步更新真实 Muse hook 的完整任务指令，采用 docs/MUSE.md 的 lease_token、renew、checkpoint 协议。新旧配置默认都要求当前 token；旧 worker 不带 token 将返回409。muse next 默认每次只领取一个任务，保存 event_id/token/截止时间/execution/completion；长任务每5分钟续租30分钟。外部工具执行前先写稳定step的started，完成后写completed及可恢复结果；completed cached时跳过工具，恢复遗留started时先核对，不能自动重做。租约只能拒绝桥的旧请求，不能撤销外部工具。
 
-启动/重启服务并检查 muse-link health、muse-link status。status 必须显示 version=0.3.0，capabilities.send 包含 image、video；只有新 CLI --help 不算后台已升级。更新原 hook，替换旧版“只能纯文字”的指令，使用 docs/MUSE.md 中完整任务指令，dry_run 后启用并记录实际检测间隔。
+按实际工具输出位置合并 media_roots，保留其他字段；跨进程文件放持久化workspace，PrivateTmp下不要依赖另一进程/tmp。真实文件生成完整后，muse reply '<event_id>' --lease-token '<token>' --image '/实际结果.png' --video '/实际结果.mp4'，可带--text -从带引号heredoc传正文，最多4个媒体。图片20MiB、视频50MiB为本地限制，不转码。最终回复全部确认后自动ack，不能先最终文字结束后补图。进度用稳定reply-id，不结束任务。
 
-Muse worker 领取事件后，长任务先用 --progress --reply-id started 发简短文字确认。生成完图片/视频，在同一最终命令发送所有结果，例如 muse-link muse reply '<实际 event_id>' --image '/实际绝对路径/result.png' --video '/实际绝对路径/result.mp4'；可再带 --text - 从 stdin 传说明。最多 4 个媒体，可仅发图片或视频。不能先发最终文字完成事件，再试图补图；预览图使用 --progress --reply-id preview。
+unknown/rejected不自动重发；核对微信和request结果，不换ID绕过。429/503/507先核对状态、修复或等待后同ID同内容重试。failed且retryable可用原文字和文件路径续传，不重做生成。步骤started未核对不能最终回复或ack。超过保留期限后旧ID不再永久去重，业务侧保留交接记录。
 
-调用返回 accepted 只代表微信接口确认，全部消息确认后自动完成事件。上传或文件准备失败返回 failed、retryable=true，核对原因后可用原请求、原文字和原媒体路径续传，已确认的消息不会再发；unknown/rejected 先报告核对，不换 ID 盲目重试，不重新生成整项任务。当前仍不支持读取微信发来的图片/视频、普通文件和原始语音。
+启动服务，status必须是version=0.4.0-rc.1，health需至少一轮成功长轮询；检查capabilities.send含text/image/video。真实hook先dry_run再启用，记录标识、间隔和工具权限。按docs/给Muse生产验收的指令.txt执行手机文字/真实工具/图片/视频验收、故障恢复、备份恢复/回滚演练及实际72小时观测，给出通过/失败/未执行和证据位置。
 
-升级后让我从微信测试：生成一张小图片并回传，再生成一个短 MP4 并回传。保留真实工具调用、event_id、request_id、media_prepare_ms、media_upload_ms、send_message_ms，核对手机能打开图片和播放视频。不要把本地模拟、代码已实现或接口 accepted 当作手机已验收通过。
+恢复备份会暂停轮询、任务领取和新发送，先核对备份后已经执行的微信/外部动作，再人工approve；不能为了启动方便直接解除闸门。生产问题需代码回滚时，暂停hook、停服务、排空任务并核对unknown/工具步骤，再运行~/.local/share/muse-link/rollback.sh，只回滚代码不回退状态。具体操作以PRODUCTION.md为准，不公开私密备份或凭据。

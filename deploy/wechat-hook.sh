@@ -13,12 +13,12 @@ if [ -z "$reason" ] && [ "$count" -gt 0 ]; then
     exit 0
 fi
 if [ -z "$reason" ]; then
-    if "$BIN" health --liveness >/dev/null 2>&1; then
+    if "$BIN" health >/dev/null 2>&1; then
         rm -f "$MARK"
         printf 'silent\n'
         exit 0
     fi
-    reason='muse-link service is unreachable'
+    reason='muse-link health failed; inspect poll, storage, unresolved sends and worker backlog'
 fi
 if [ -f "$MARK" ] && [ -z "$(find "$MARK" -mmin +60 2>/dev/null)" ]; then
     printf 'silent\n'

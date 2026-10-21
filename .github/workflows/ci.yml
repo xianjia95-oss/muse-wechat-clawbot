@@ -28,6 +28,7 @@ jobs:
       - run: npm ci --no-fund
       - run: npm test
       - run: npm run demo
+      - run: npm run soak -- --duration 5s
       - run: python scripts/build_app_package.py
       - name: Upload source archive
         if: runner.os == 'Linux'
@@ -38,3 +39,12 @@ jobs:
             dist/muse-link-v*.zip
             dist/muse-link-v*.zip.sha256
           if-no-files-found: error
+  installer:
+    name: Linux installer and rollback
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies in disposable Linux container
+        run: docker run --rm -v "$PWD:/work" -w /work node:24-bookworm-slim npm ci --no-fund
+      - name: Exercise install, failure, backup, upgrade and rollback
+        run: docker run --rm -v "$PWD:/work:ro" -w /work node:24-bookworm-slim bash test/install-smoke.sh

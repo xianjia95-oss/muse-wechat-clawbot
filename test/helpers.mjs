@@ -8,6 +8,9 @@ export const session = { bot_token: 'TEST-SECRET', base_url: 'https://ilinkai.we
 export function fixture(t, transport = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'muse-link-test-'));
   const config = { binding: 'muse', state_dir: directory, allow_wxids: [], api_token: 'a'.repeat(64), listen: { host: '127.0.0.1', port: 18791 }, send_timeout_ms: 1000, poll_timeout_ms: 45000 };
+  // Legacy protocol regression cases explicitly opt out. New operational tests
+  // enable the production-default lease checks and exercise stale-worker fencing.
+  config.require_lease_token = false;
   const store = new Store(directory);
   store.set('session', session);
   store.saveContext('owner', 'context-1');

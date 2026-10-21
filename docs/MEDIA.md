@@ -1,6 +1,6 @@
 # 从 Muse 回传图片和视频
 
-v0.3.0 实现 Muse → 微信的图片、视频发送：本地文件检查 → 加密快照 → 获取上传地址 → CDN 上传 → 发送媒体消息 → 微信接口确认 → 最终回复自动完成事件。没有新增 npm 依赖，不需要 ffmpeg 常驻。真实账号收取、缩略图显示及视频播放兼容性尚待云端验证。
+v0.3.0 起实现 Muse → 微信的图片、视频发送：本地文件检查 → 加密快照 → 获取上传地址 → CDN 上传 → 发送媒体消息 → 微信接口确认 → 最终回复自动完成事件。没有新增 npm 依赖，不需要 ffmpeg 常驻。真实账号收取、缩略图显示及视频播放兼容性尚待云端验证。
 
 ## 支持范围
 
@@ -31,22 +31,22 @@ media.path 是桥运行的 Muse 云端 Linux 中的绝对文件路径。默认�
 
 ## 发送命令
 
-先通过 muse next 领取事件，用日志中的真实 event_id。图片或视频可以没有文字：
+先通过 muse next 领取事件，使用真实 event_id 及本次 lease_token；长任务续租并记录生成步骤。图片或视频可以没有文字：
 
 ```bash
-muse-link muse reply '<event_id>' --image "$HOME/workspace/result.png"
+muse-link muse reply '<event_id>' --lease-token '<lease_token>' --image "$HOME/workspace/result.png"
 ```
 
 另一个事件回复视频：
 
 ```bash
-muse-link muse reply '<另一个 event_id>' --video "$HOME/workspace/result.mp4"
+muse-link muse reply '<另一个 event_id>' --lease-token '<lease_token>' --video "$HOME/workspace/result.mp4"
 ```
 
 同一最终回复带文字与图片/视频：
 
 ```bash
-muse-link muse reply '<event_id>' \
+muse-link muse reply '<event_id>' --lease-token '<lease_token>' \
   --image "$HOME/workspace/result.png" \
   --video "$HOME/workspace/result.mp4" \
   --text - <<'MUSE_REPLY'
@@ -70,6 +70,8 @@ MUSE_REPLY
 
 ## 升级和真实验收
 
-将 v0.3.0 部署包与更新后的“给 Muse 的指令”一起交给 Muse。按 docs/MUSE.md 的升级步骤暂停 hook、停止旧 muse-link、安装并重启，保留原配置和 SQLite 状态。重新注册或更新旧 hook 中的“只能纯文字”指令。检查服务 status 的 version=0.3.0，capabilities.send 包含 image、video；只查看新 CLI 的 --help 不足以确认后台已升级。
+将 v0.4.0-rc.1 部署包与更新后的“给 Muse 的指令”一起交给 Muse。按 docs/MUSE.md 的升级步骤暂停 hook、停止旧 muse-link、安装并重启，保留原配置和 SQLite 状态。重新注册或更新旧 hook 中的“只能纯文字”指令。检查服务 status 的 version=0.4.0-rc.1，capabilities.send 包含 image、video；只查看新 CLI 的 --help 不足以确认后台已升级。
 
 从微信分别要求生成一张小图片和一个短 MP4。Muse 应报告真实本地路径、request_id、上传及发送耗时；在手机核对图片能打开、视频可播放。图片和视频都通过后，再检查文字与多个附件、重复提交无重复发送、上传失败续传。接口 accepted 不代表手机已收取或可播放。
+
+候选版的 failed/unknown 媒体快照默认最多保留 7 天；过期清理前将 failed 冻结为 unknown，不允许缺少原快照后换文件续发。超过 24 小时的无引用临时文件由维护清理。空间预算、备份、去重期限和恢复流程见 [生产运行](PRODUCTION.md)。

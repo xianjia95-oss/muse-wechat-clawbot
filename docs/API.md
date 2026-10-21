@@ -6,26 +6,27 @@
 
 这些接口运行在桥上，由真实 Muse 在其原生 hooks 中调用，并非 Muse 官方模型 API。
 
-`GET /v1/muse/tasks?limit=20&lease=30m&wait=0s` 领取任务，返回 `{"tasks":[...]}`。任务包含原始事件字段及 completion，其中 request_id 为最终回复的固定编号，state 为 not_submitted / pending / accepted / rejected / unknown / failed。同一租约参数范围与下方收件箱接口相同。读取不会自动执行 Muse 任务。
+`GET /v1/muse/tasks?limit=20&lease=30m&wait=0s` 领取任务，返回 `{"tasks":[...]}`。任务包含原始事件字段、lease_token、lease_until、execution.steps / execution.needs_review 及 completion，其中 request_id 为最终回复的固定编号，state 为 not_submitted / pending / accepted / rejected / unknown / failed。同一租约参数范围与下方收件箱接口相同。读取不会自动执行 Muse 任务。
 
 最终回复 `POST /v1/muse/replies`：
 
 ```json
 {
   "event_id": "muse:example-event",
+  "lease_token": "领取该任务时返回的 token",
   "text": "Muse 的处理结果"
 }
 ```
 
 桥从已领取的事件中查找收件人，自动生成稳定 request_id。微信确认全部文字分段及媒体消息后，才 ack 事件；响应包括 state=accepted、event_completed=true 和 timing。若网络不确定或发送被拒绝，保留事件且不自动重发。崩溃发生在发送成功、ack 之前时，后续 muse/tasks 会依据持久化发送结果完成事件，避免再次交给 Muse 执行。
 
-v0.3.0 可附 `"media":[{"type":"image","path":"/absolute/result.png"},{"type":"video","path":"/absolute/result.mp4"}]`，有媒体时 text 可省略。最多 4 个，仅接受桥所在机器上的绝对路径，并检查 config.media_roots。图片 20 MiB、视频 50 MiB 本地上限。桥按文字分段、media 数组顺序发送；CLI 多个 --image 排在多个 --video 前。详见 [媒体说明](MEDIA.md)。
+v0.4.0-rc.1 可附 `"media":[{"type":"image","path":"/absolute/result.png"},{"type":"video","path":"/absolute/result.mp4"}]`，有媒体时 text 可省略。最多 4 个，仅接受桥所在机器上的绝对路径，并检查 config.media_roots。图片 20 MiB、视频 50 MiB 本地上限。桥按文字分段、media 数组顺序发送；CLI 多个 --image 排在多个 --video 前。详见 [媒体说明](MEDIA.md)。
 
 进度回复额外传 `"mode":"progress","reply_id":"started"`。progress 需要每条进度的稳定 reply_id，成功后不结束任务。最终回复 mode 默认为 final，不能指定 reply_id、to、binding 或 request_id，避免更换编号绕过去重或发错用户。两个模式均支持可选 model_ready_at。
 
 同一最终回复重复提交相同文字及媒体类型/路径，返回缓存并修复未完成的 ack；更换文字、媒体类型或路径重用最终回复会报 ID 冲突。媒体 ID 绑定首次成功准备的文件快照；原路径后续内容变化不会替换已有快照，成功后重试返回旧结果。unknown 需核对微信及在 Muse 聊天报告，不能另起编号盲目重发。需要主动结束未发送的任务或处理 alert 时，报告并持久化结果后再调用 events/ack。外部任务本身的执行去重仍需由 Muse 按 event_id 记录进度。
 
-命令行对应：`muse-link muse next`、`muse-link muse reply EVENT_ID --text -`、`muse-link muse ack EVENT_ID`。保留以下底层发送接口用于诊断。
+命令行对应：`muse-link muse next`、`muse-link muse reply EVENT_ID --lease-token '<lease_token>' --text -`、`muse-link muse ack EVENT_ID --lease-token '<lease_token>'`。保留以下底层发送接口用于诊断。
 
 ## 即时回复
 
@@ -79,9 +80,20 @@ CDN 上传在 media_timeout_ms（默认 120000）总时限内最多尝试三次�
 ## 收件箱与状态
 
 - `GET /v1/events?limit=20&lease=30m&wait=30s`：领取。limit 1..100、lease 1 秒..1 小时、wait 0..60 秒；等待请求有事件时立即返回。
-- `POST /v1/events/ack`：正文 `{"event_ids":["muse:123"]}`，处理完确认。
-- `GET /v1/status`：version、capabilities、登录、接收状态、收件箱数量、发送中请求数；升级后应显示 version=0.3.0、capabilities.send 含 image/video。
+- `POST /v1/events/ack`：正文 `{"event_ids":["muse:123"],"lease_token":"当前领取 token"}`；多事件不同 token 用 lease_tokens 对象按 event_id 映射，处理完确认。
+- `GET /v1/status`：version、capabilities、登录、接收状态、收件箱数量、发送中请求数；升级后应显示 version=0.4.0-rc.1、capabilities.send 含 image/video。
 - `GET /v1/metrics`：最近 300 请求的状态计数，以及成功请求耗时 p50/p95。失败和 pending 不混入成功耗时。
 - `GET /healthz`：进程存活；微信连通性看 status 或 muse-link health。
 
 事件按 event_id 去重，领取有租约。会话、上下文、事件和发送状态在 state_dir 的 SQLite 中。接收批次的事件、上下文和游标原子提交。入站文本和微信语音转写可读；暂不支持的附件通过 media_errors 报告。
+
+## 生产候选版的租约、步骤与健康
+
+默认 require_lease_token=true。回复、进度、ack、续租和 checkpoint 使用当前有效租约；旧 token / 已过期 / 已确认事件返回 409 stale_lease。已经 accepted 的相同回复可读取缓存，无需重新触发发送。底层 send 没有 Muse 执行语义，仅供受信诊断调用。
+
+- `POST /v1/muse/renew`：`{"event_id":"muse:123","lease_token":"...","lease_ms":1800000}`，1 秒到 1 小时，返回新的 lease_until，token 不变。
+- `POST /v1/muse/checkpoints`：`{"event_id":"muse:123","lease_token":"...","step":"tool-action","phase":"started","result":null}`；工具完成后同 step、phase=completed，result 最多 16 KiB。完成的步骤返回 cached=true，应跳过工具。重投后的 started 无法再次开始，需核对后用 reviewed=true 完成记录；遗留 started 阻止最终回复和 ack。步骤和外部系统不在同一事务，不能保证外部动作恰好一次。
+- `POST /v1/requests/<id>/review`：`{"reviewed":true,"note":"核对记录，最多1000字符"}`。仅允许 unknown，状态仍为 unknown，resend_allowed=false；此操作解除未核对告警，不授权重发。
+- `GET /v1/health`：认证的 readiness，200 healthy=true 或 503 healthy=false；problems、queue、storage 及 status。检查轮询新鲜度、存储、积压、未知发送、遗留工具步骤和恢复闸门。
+
+容量满返回 429 queue_full / 503 http_capacity 或 inbox_full，存储预算返回 507 storage_pressure，维护/停机排空返回 503；429/503/507 带 Retry-After:5。检查 request 后再决定是否用相同内容重试。具体预算、90 天幂等保留窗口、恢复后的强制核对、备份与上线条件见 [生产运行](PRODUCTION.md)。

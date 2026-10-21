@@ -3,7 +3,8 @@ import { EventEmitter } from 'node:events';
 import { performance } from 'node:perf_hooks';
 import { setTimeout as pause } from 'node:timers/promises';
 import { BridgeError, fail, integer } from './errors.mjs';
-import { VERSION } from './config.mjs';
+import { VERSION, operational } from './config.mjs';
+import { Resources } from './operations.mjs';
 import { normalizeMedia, prepareMedia, snapshotAvailable, removeSnapshot } from './media.mjs';
 
 const hash = (value) => createHash('sha256').update(value).digest('hex');
@@ -23,8 +24,11 @@ export class Bridge {
     this.log = log;
     this.inflight = new Map();
     this.peerTails = new Map();
+    this.peerCounts = new Map();
+    this.resources = new Resources(config);
+    this.stopping = false;
     this.events = new EventEmitter();
-    this.events.setMaxListeners(100);
+    this.events.setMaxListeners(operational(config).max_http_requests + 1);
     this.poll = { state: 'stopped', last_ok_at: null, error: null };
     this.controller = new AbortController();
   }
@@ -64,7 +68,7 @@ export class Bridge {
 
   // The response is only successful after WeChat has accepted every chunk.
   // No timer, scheduled flush, receive-loop wait, or process-per-chunk execution.
-  send(body) {
+  send(body, { eventId = null } = {}) {
     body = this.validateSend(body);
     // Preserve v0.2 text fingerprints. Media IDs bind the supplied paths to the
     // first prepared snapshots; retries never substitute changed file bytes.
@@ -76,6 +80,11 @@ export class Bridge {
     if (prior && ['unknown', 'rejected'].includes(prior.state)) {
       fail(prior.state === 'unknown' ? 'send_unknown' : 'send_rejected', 'Previous outcome must be reviewed; this request will not be resent.', 409, { request: prior.result, state: prior.state });
     }
+    if (this.stopping || this.maintaining) fail('unavailable', 'Service is draining or performing maintenance; retry the same request later.', 503);
+    if (this.store.get('restore_review_required', false)) fail('restore_review_required', 'Restored state requires operator reconciliation before work resumes.', 409);
+    const limits = operational(this.config);
+    if (this.inflight.size >= limits.max_inflight_sends || (this.peerCounts.get(body.to) ?? 0) >= limits.max_peer_sends) fail('queue_full', 'Send queue capacity reached; retry the same request later.', 429, { retry_after_seconds: 5 });
+    this.resources.check(Buffer.byteLength(body.text) + 16384);
     const session = this.store.get('session');
     if (!session || this.store.get('expired', false)) fail('not_logged_in', '请先扫码登录，并启动或重启 muse-link。', 401);
     if (!this.store.context(body.to)) fail('no_context', '请先用微信给 ClawBot 发一条消息。', 409);
@@ -84,7 +93,7 @@ export class Bridge {
       ...body.media,
     ];
     if (!prior) this.store.createSend(body.request_id, fingerprint, body.to,
-      chunks.map((_, index) => `ml-${hash(`${body.request_id}:${index}`).slice(0, 32)}`));
+      chunks.map((_, index) => `ml-${hash(`${body.request_id}:${index}`).slice(0, 32)}`), eventId);
     else if (prior.state === 'failed') this.store.retrySend(body.request_id);
     const began = performance.now();
     const submittedAt = Date.now();
@@ -92,8 +101,11 @@ export class Bridge {
     const work = previous.catch(() => {}).then(() => this.deliver(body, chunks, began, submittedAt));
     this.peerTails.set(body.to, work);
     this.inflight.set(body.request_id, work);
+    this.peerCounts.set(body.to, (this.peerCounts.get(body.to) ?? 0) + 1);
     const clean = () => {
       this.inflight.delete(body.request_id);
+      const count = this.peerCounts.get(body.to) - 1;
+      if (count) this.peerCounts.set(body.to, count); else this.peerCounts.delete(body.to);
       if (this.peerTails.get(body.to) === work) this.peerTails.delete(body.to);
     };
     work.then(clean, clean);
@@ -139,7 +151,7 @@ export class Bridge {
       for (const part of parts) {
         if (part.state === 'accepted' || chunks[part.part].type === 'text') continue;
         const record = this.store.media(body.request_id, part.part);
-        if (!record) this.store.saveMedia(body.request_id, part.part, await prepareMedia(this.config, body.request_id, part.part, chunks[part.part]));
+        if (!record) this.store.saveMedia(body.request_id, part.part, await prepareMedia(this.config, body.request_id, part.part, chunks[part.part], (bytes) => this.resources.reserve(bytes)));
         else if (!record.media_item && !await snapshotAvailable(this.config, body.request_id, record)) fail('media_snapshot_missing', 'Prepared media snapshot is unavailable. Do not replace its bytes under this request ID.');
       }
     } catch (error) {
@@ -199,6 +211,11 @@ export class Bridge {
   }
 
   alert(code, message) {
+    // Coalesce outstanding alerts by type and keep a full inbox/disk failure
+    // from generating still more state. Poll health and logs remain observable.
+    if (this.store.db.prepare("SELECT 1 FROM events WHERE acked_ms IS NULL AND json_extract(body,'$.alert.code')=? LIMIT 1").get(code)) return;
+    if (this.store.queueStats().pending >= operational(this.config).max_pending_events) return;
+    try { this.resources.check(4096); } catch { return; }
     const event = {
       schema: 'muselink.event.v1', binding: this.config.binding, event_id: `${this.config.binding}:alert:${randomUUID()}`,
       kind: 'alert', text: '', media: [], alert: { code, message }, create_time: Math.floor(Date.now() / 1000),
@@ -208,10 +225,13 @@ export class Bridge {
   }
   ingest(response) {
     let added = 0;
+    this.resources.check(Buffer.byteLength(JSON.stringify(response)) + 16384);
+    const pending = this.store.queueStats().pending;
     this.store.transaction(() => {
       for (const message of response.msgs ?? []) {
         if (!message.from_user_id || !this.allowed(message.from_user_id)) continue;
         if (message.message_id === undefined) throw new Error('Message is missing message_id');
+        if (!this.store.event(`${this.config.binding}:${message.message_id}`) && pending + added >= operational(this.config).max_pending_events) fail('inbox_full', 'Inbox capacity reached; cursor remains unchanged until the worker drains events.', 503);
         if (message.context_token) this.store.saveContext(message.from_user_id, message.context_token);
         const items = message.item_list ?? [];
         const unsupported = items.filter((item) => item.type !== 1 && !(item.type === 3 && item.voice_item?.text));
@@ -235,6 +255,7 @@ export class Bridge {
     return added;
   }
   async runPoll() {
+    if (this.store.get('restore_review_required', false)) { this.poll = { ...this.poll, state: 'restore_review' }; return; }
     if (!this.store.get('session')) { this.poll = { ...this.poll, state: 'not_logged_in' }; return; }
     let failures = 0;
     let firstFailure = null;
@@ -268,11 +289,13 @@ export class Bridge {
     if (this.store.get('expired', false)) this.poll.state = 'expired';
   }
   async claim({ limit = 20, lease = 1800000, wait = 0 } = {}, signal) {
+    if (this.store.get('restore_review_required', false)) fail('restore_review_required', 'Reconcile restored state before claiming work.', 409);
     integer(limit, 1, 100, 'limit');
     integer(lease, 1000, 3600000, 'lease');
     integer(wait, 0, 60000, 'wait');
     const deadline = Date.now() + wait;
     for (;;) {
+      if (this.stopping) fail('unavailable', 'Service is draining.', 503);
       const events = this.store.claim(limit, lease);
       if (events.length || Date.now() >= deadline || signal?.aborted) return events;
       await new Promise((resolve) => {
@@ -284,6 +307,7 @@ export class Bridge {
     }
   }
   async close() {
+    this.stopping = true;
     this.controller.abort();
     await this.pollTask;
     await Promise.allSettled(this.inflight.values());

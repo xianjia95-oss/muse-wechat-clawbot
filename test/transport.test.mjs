@@ -1,10 +1,19 @@
 import test from 'node:test';
+import { Readable } from 'node:stream';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
 import { Agent, request } from 'undici';
 import { Ilink, parseWire, wechatBase } from '../src/ilink.mjs';
 import { session, deferred } from './helpers.mjs';
+
+test('oversized streamed upstream JSON stops reading at the local budget', async (t) => {
+  const body = Readable.from(Array.from({ length: 12 }, () => Buffer.alloc(512 * 1024, 32)));
+  const ilink = new Ilink({ send_timeout_ms: 1000 }, { requestFn: async () => ({ statusCode: 200, body }) });
+  t.after(() => ilink.close());
+  await assert.rejects(ilink.sendText(session, 'owner', 'hello', 'context', 'bounded-id'), { code: 'upstream_response_too_large' });
+  assert.equal(body.destroyed, true);
+});
 
 test('real int64 IDs are lossless without rewriting text containing JSON-like strings', () => {
   const result = parseWire('{"message_id":7523456789012345678,"text":"a \\\"message_id\\\":123 marker"}');

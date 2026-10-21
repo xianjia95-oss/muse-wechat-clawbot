@@ -15,7 +15,7 @@ process.umask(0o077);
 const { values } = parseArgs({ options: { report: { type: 'string' } } });
 const directory = mkdtempSync(join(tmpdir(), 'muse-clawbot-demo-'));
 const store = new Store(directory);
-const config = { binding: 'muse', allow_wxids: [], api_token: 'local-simulation-only-'.repeat(3), send_timeout_ms: 2000, poll_timeout_ms: 45000 };
+const config = { binding: 'muse', state_dir: directory, allow_wxids: [], api_token: 'local-simulation-only-'.repeat(3), send_timeout_ms: 2000, poll_timeout_ms: 45000 };
 store.set('session', { bot_token: 'SIMULATION-ONLY', base_url: 'https://ilinkai.weixin.qq.com', ilink_bot_id: 'demo-bot', ilink_user_id: 'demo-owner' });
 let inboxDelivered = false;
 const outbound = [];
@@ -63,7 +63,7 @@ try {
   const { tasks } = await call('/v1/muse/tasks?wait=2s&lease=30m');
   if (tasks.length !== 1) throw new Error('Expected one local simulated WeChat task');
   const task = tasks[0];
-  const body = { event_id: task.event_id, text: '连接成功（模拟 Muse 回复）' };
+  const body = { event_id: task.event_id, lease_token: task.lease_token, text: '连接成功（模拟 Muse 回复）' };
   const reply = await call('/v1/muse/replies', body);
   const retry = await call('/v1/muse/replies', body);
   const completed = store.event(task.event_id).acked_ms !== null;

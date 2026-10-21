@@ -10,6 +10,8 @@ coverage/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+*.sqlite-journal
+/backups/
 *.db
 *.db-shm
 *.db-wal

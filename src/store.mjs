@@ -1,14 +1,20 @@
 import { DatabaseSync } from 'node:sqlite';
-import { chmodSync, mkdirSync } from 'node:fs';
+import { chmodSync, mkdirSync, existsSync, lstatSync } from 'node:fs';
 import { join } from 'node:path';
+import { randomBytes } from 'node:crypto';
+import { fail } from './errors.mjs';
+
+export const SCHEMA_VERSION = 1;
 
 export class Store {
   constructor(directory) {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     chmodSync(directory, 0o700);
     const file = join(directory, 'bridge.sqlite');
+    if (existsSync(file) && lstatSync(file).isSymbolicLink()) fail('unsafe_state', 'Database must not be a symbolic link.');
     this.db = new DatabaseSync(file);
     chmodSync(file, 0o600);
+    if (this.db.prepare('PRAGMA user_version').get().user_version > SCHEMA_VERSION) { this.db.close(); fail('future_schema', 'Database schema is newer than this program.'); }
     this.db.exec(`
       PRAGMA journal_mode=WAL;
       PRAGMA synchronous=FULL;
@@ -33,6 +39,16 @@ export class Store {
         PRIMARY KEY(request_id, part)
       );
     `);
+    this.transaction(() => {
+      const columns = this.db.prepare('PRAGMA table_info(events)').all();
+      if (!columns.some((column) => column.name === 'lease_token')) this.db.exec("ALTER TABLE events ADD COLUMN lease_token TEXT");
+      this.db.exec(`CREATE TABLE IF NOT EXISTS task_steps (
+        event_id TEXT NOT NULL, step TEXT NOT NULL, state TEXT NOT NULL, lease_token TEXT NOT NULL,
+        result TEXT, updated_ms INTEGER NOT NULL, PRIMARY KEY(event_id,step));
+        CREATE TABLE IF NOT EXISTS send_events (request_id TEXT PRIMARY KEY, event_id TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS sends_created ON sends(created_ms);
+        PRAGMA user_version=${SCHEMA_VERSION};`);
+    });
   }
 
   close() { this.db.close(); }
@@ -60,8 +76,8 @@ export class Store {
       .run(event.event_id, JSON.stringify(event), Date.now()).changes;
   }
   event(id) {
-    const row = this.db.prepare('SELECT body,lease_until,acked_ms FROM events WHERE id=?').get(id);
-    return row ? { event: JSON.parse(row.body), lease_until: row.lease_until, acked_ms: row.acked_ms } : null;
+    const row = this.db.prepare('SELECT body,lease_until,lease_token,acked_ms FROM events WHERE id=?').get(id);
+    return row ? { event: JSON.parse(row.body), lease_until: row.lease_until, lease_token: row.lease_token, acked_ms: row.acked_ms } : null;
   }
   count() {
     return this.db.prepare('SELECT count(*) AS n FROM events WHERE acked_ms IS NULL AND lease_until<=?').get(Date.now()).n;
@@ -70,10 +86,49 @@ export class Store {
     return this.transaction(() => {
       const now = Date.now();
       const rows = this.db.prepare('SELECT id,body FROM events WHERE acked_ms IS NULL AND lease_until<=? ORDER BY received_ms,id LIMIT ?').all(now, limit);
-      const update = this.db.prepare('UPDATE events SET lease_until=? WHERE id=?');
-      for (const row of rows) update.run(now + leaseMs, row.id);
-      return rows.map((row) => JSON.parse(row.body));
+      const update = this.db.prepare('UPDATE events SET lease_until=?,lease_token=? WHERE id=?');
+      return rows.map((row) => {
+        const lease_token = randomBytes(24).toString('hex');
+        update.run(now + leaseMs, lease_token, row.id);
+        return { ...JSON.parse(row.body), lease_token, lease_until: now + leaseMs };
+      });
     });
+  }
+  requireLease(id, token) {
+    if (typeof id !== 'string' || !id || typeof token !== 'string') fail('stale_lease', 'event_id and current lease_token are required.', 409);
+    const row = this.event(id);
+    if (!row || row.acked_ms !== null || row.lease_until <= Date.now() || typeof token !== 'string' || row.lease_token !== token) fail('stale_lease', 'Current unexpired lease_token is required; do not execute or resend work under an old lease.', 409);
+    return row;
+  }
+  renew(id, token, leaseMs) {
+    this.requireLease(id, token);
+    const until = Date.now() + leaseMs;
+    this.db.prepare('UPDATE events SET lease_until=? WHERE id=? AND lease_token=?').run(until, id, token);
+    return { event_id: id, lease_until: until };
+  }
+  steps(id) { return this.db.prepare('SELECT step,state,result,updated_ms FROM task_steps WHERE event_id=? ORDER BY step').all(id).map((row) => ({ ...row, result: row.result === null ? null : JSON.parse(row.result) })); }
+  checkpoint(id, token, step, phase, result, reviewed = false) {
+    return this.transaction(() => {
+      this.requireLease(id, token);
+      const prior = this.db.prepare('SELECT * FROM task_steps WHERE event_id=? AND step=?').get(id, step);
+      if (prior?.state === 'completed') return { cached: true, step, state: 'completed', result: JSON.parse(prior.result) };
+      if (phase === 'started' && prior) fail('step_uncertain', 'This step was already started; verify its external outcome before resolving it.', 409);
+      if (phase === 'started' && this.steps(id).some((entry) => entry.state === 'started')) fail('step_uncertain', 'An unfinished step must be reconciled before starting another tool operation.', 409);
+      if (phase === 'completed' && (!prior || (prior.lease_token !== token && !reviewed))) fail('step_review_required', 'Completion requires the owning lease, or explicit reviewed=true after verifying the external outcome.', 409);
+      this.db.prepare('INSERT INTO task_steps VALUES (?,?,?,?,?,?) ON CONFLICT(event_id,step) DO UPDATE SET state=excluded.state,lease_token=excluded.lease_token,result=excluded.result,updated_ms=excluded.updated_ms')
+        .run(id, step, phase, token, JSON.stringify(result ?? null), Date.now());
+      return { cached: false, step, state: phase, result: result ?? null };
+    });
+  }
+  queueStats() {
+    const now = Date.now();
+    return {
+      pending: this.db.prepare('SELECT count(*) AS n FROM events WHERE acked_ms IS NULL').get().n,
+      leased: this.db.prepare('SELECT count(*) AS n FROM events WHERE acked_ms IS NULL AND lease_until>?').get(now).n,
+      oldest_ready_ms: this.db.prepare('SELECT min(received_ms) AS n FROM events WHERE acked_ms IS NULL AND lease_until<=?').get(now).n,
+      unknown_sends: this.db.prepare("SELECT count(*) AS n FROM sends WHERE state='unknown' AND coalesce(json_extract(result,'$.reviewed'),0)=0").get().n,
+      unresolved_steps: this.db.prepare("SELECT count(*) AS n FROM task_steps s JOIN events e ON e.id=s.event_id WHERE s.state='started' AND (s.lease_token<>e.lease_token OR e.lease_until<=?)").get(now).n,
+    };
   }
   ack(ids) {
     return this.transaction(() => {
@@ -87,9 +142,10 @@ export class Store {
     const row = this.db.prepare('SELECT * FROM sends WHERE id=?').get(id);
     return row ? { ...row, result: row.result ? JSON.parse(row.result) : null } : null;
   }
-  createSend(id, fingerprint, recipient, clientIds) {
+  createSend(id, fingerprint, recipient, clientIds, eventId = null) {
     this.transaction(() => {
-      this.db.prepare('INSERT INTO sends VALUES (?,?,?,?,?,NULL)').run(id, fingerprint, recipient, 'pending', Date.now());
+      this.db.prepare('INSERT INTO sends(id,fingerprint,recipient,state,created_ms,result) VALUES (?,?,?,?,?,NULL)').run(id, fingerprint, recipient, 'pending', Date.now());
+      if (eventId) this.db.prepare('INSERT INTO send_events VALUES (?,?)').run(id, eventId);
       const insert = this.db.prepare('INSERT INTO parts VALUES (?,?,?,?,NULL)');
       clientIds.forEach((clientId, index) => insert.run(id, index, clientId, 'prepared'));
     });
@@ -110,6 +166,13 @@ export class Store {
   finish(id, state, result) {
     this.db.prepare('UPDATE sends SET state=?,result=? WHERE id=?').run(state, JSON.stringify(result), id);
   }
+  reviewSend(id, note) {
+    const row = this.send(id);
+    if (!row || row.state !== 'unknown') fail('not_unknown', 'Only an unknown request can be marked reviewed.', 409);
+    const result = { ...row.result, reviewed: true, reviewed_at: new Date().toISOString(), review_note: note };
+    this.finish(id, 'unknown', result);
+    return { request_id: id, state: 'unknown', reviewed: true, resend_allowed: false };
+  }
   recoverUncertain() {
     this.transaction(() => {
       this.db.exec("UPDATE parts SET state='unknown' WHERE state='sending'");
@@ -119,13 +182,16 @@ export class Store {
           this.finish(id, 'unknown', { ok: false, request_id: id, state: 'unknown', error: 'process_interrupted', accepted_chunks: this.parts(id).filter((part) => part.state === 'accepted').length });
         }
       }
+      for (const row of this.db.prepare("SELECT id FROM sends WHERE state='pending'").all()) {
+        this.finish(row.id, 'failed', { ok: false, request_id: row.id, state: 'failed', retryable: true, error: 'interrupted_before_confirmation', accepted_chunks: this.parts(row.id).filter((part) => part.state === 'accepted').length });
+      }
     });
   }
   metrics() {
     const rows = this.db.prepare('SELECT state,result FROM sends ORDER BY created_ms DESC LIMIT 300').all();
     const accepted = rows.filter((row) => row.state === 'accepted').map((row) => JSON.parse(row.result));
     const percentile = (field, p) => {
-      const values = accepted.map((row) => row.timing[field]).filter(Number.isFinite).sort((a, b) => a - b);
+      const values = accepted.map((row) => row.timing?.[field]).filter(Number.isFinite).sort((a, b) => a - b);
       return values.length ? values[Math.ceil(values.length * p) - 1] : null;
     };
     return {
