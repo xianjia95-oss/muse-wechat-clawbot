@@ -60,6 +60,6 @@ export function health(bridge) {
   if (queue.unresolved_steps) problems.push('task_step_needs_review');
   if (bridge.config.require_lease_token === false) problems.push('legacy_worker_protocol');
   let storage;
-  try { storage = bridge.resources.check(); } catch (error) { problems.push(error.code ?? 'storage_check_failed'); }
+  try { storage = bridge.resources.check(0, true); } catch (error) { problems.push(error.code ?? 'storage_check_failed'); }
   return { healthy: problems.length === 0, problems, queue, storage, ...status };
 }

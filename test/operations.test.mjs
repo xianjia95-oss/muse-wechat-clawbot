@@ -109,6 +109,9 @@ test('readiness detects stale polls, backlog and unknown sends; review never per
   store.reviewSend('uncertain', 'Operator verified and recorded disposition');
   assert.equal(health(bridge).healthy, true);
   assert.throws(() => bridge.send(reply('uncertain')), { code: 'send_unknown' });
+  config.operations = { min_free_bytes: 100, max_state_bytes: 1000, max_outbox_bytes: 500 };
+  bridge.resources = new Resources(config, () => ({ free_bytes: 2000, state_bytes: 700, outbox_bytes: 600 }));
+  assert.ok(health(bridge).problems.includes('storage_pressure'));
 });
 
 test('maintenance prunes completed history, preserves active/unknown intents and freezes expired media', async (t) => {

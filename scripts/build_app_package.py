@@ -24,7 +24,7 @@ for directory, extensions in (
 ):
     files.extend(path for path in (root / directory).rglob("*") if path.is_file() and path.suffix in extensions)
 with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
-    for path in sorted(files):
+    for path in sorted(files, key=lambda value: value.relative_to(root).as_posix()):
         content = path.read_bytes()
         relative = path.relative_to(root).as_posix()
         assert not path.is_symlink(), path
