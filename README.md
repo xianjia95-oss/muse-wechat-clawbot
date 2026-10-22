@@ -1,6 +1,6 @@
 # Muse Link — Muse 对接微信 ClawBot
 
-仓库：[muse-wechat-clawbot](https://github.com/xianjia95-oss/muse-wechat-clawbot)。使用 [MIT 许可证](LICENSE)，允许使用、修改、分发和商用；分发时须保留版权及许可声明。项目独立开发，与 Meta、腾讯及 OpenClaw 无官方隶属或背书关系。
+仓库：[muse-wechat-clawbot](https://github.com/xianjia95-oss/muse-wechat-clawbot)。使用 [MIT 许可证](LICENSE)，允许使用、修改、分发和商用；分发时须保留版权及许可声明。项目独立开发，与 Meta、腾讯无官方隶属或背书关系。
 
 为 Meta Muse 自行开发的微信桥，重点测量并改善“结果已准备好，回微信却很慢”的回传链路。直接使用 iLink 协议，独立运行。
 
@@ -31,7 +31,7 @@ npm start
 
 另开终端运行 `node src/cli.mjs status`。用户先在微信启用 ClawBot 插件，并发消息建立回复上下文。扫码命令打印唯一图片路径，单码客户端等待上限 5 分钟，微信可能提前返回过期；确认后删除图片。手机若要求输入配对数字，按登录日志的 verification_required 和 [验证码步骤](docs/MUSE.md#手机要求配对验证码时) 继续。
 
-部署到 Meta Muse：将源码上传到 Muse 云端，发送 [部署指令](docs/给Muse的指令.txt)。也可先执行 `python scripts/build_app_package.py`，再上传生成的 `dist/muse-link-v0.4.0-rc.4.zip`。详见 [Muse 部署](docs/MUSE.md)、[图片与视频回传](docs/MEDIA.md)、[API 与耗时](docs/API.md) 和 [教程与腾讯协议核对](docs/REFERENCE.md)。
+部署到 Meta Muse：将源码上传到 Muse 云端，发送 [部署指令](docs/给Muse的指令.txt)。也可先执行 `python scripts/build_app_package.py`，再上传生成的 `dist/muse-link-v0.4.0-rc.4.zip`。详见 [Muse 部署](docs/MUSE.md)、[图片与视频回传](docs/MEDIA.md)、[API 与耗时](docs/API.md) 和 [接入与协议说明](docs/REFERENCE.md)。
 
 ## 发送与定位
 
@@ -57,7 +57,7 @@ muse-link muse reply '<另一个 event_id>' --lease-token '<lease_token>' --vide
 
 返回 timing 区分排队、微信 API 和桥处理耗时。可选真实结果完成时间还能测完成到提交的间隔。`muse-link request '<request_id>'` 核对单次结果，`muse-link metrics` 看近期统计。成功表示微信接口已确认，不能确认手机显示。底层 send/inbox 命令仍可用于诊断。
 
-Muse Link 通过独立收发连接和耗时记录减少可控开销并定位问题。Muse 收消息仍需平台 hooks（建议 5 秒检测，以平台支持为准），已提交的回复直接发送。腾讯协议要求 getupdates 在有消息或长轮询超时后返回，35 秒不是每条消息的固定等待，不能与 hook 间隔机械相加作为响应耗时。
+Muse Link 通过独立收发连接和耗时记录减少可控开销并定位问题。Muse 收消息仍需平台 hooks（建议 5 秒检测，以平台支持为准），已提交的回复直接发送。iLink 协议要求 getupdates 在有消息或长轮询超时后返回，35 秒不是每条消息的固定等待，不能与 hook 间隔机械相加作为响应耗时。
 
 ## 验证与打包
 

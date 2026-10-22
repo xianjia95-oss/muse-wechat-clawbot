@@ -81,8 +81,8 @@ export async function login(store, ilink, { directory, timeout = 600000, onQr = 
       await QRCode.toFile(path, qr.qrcode_img_content, { width: 400, margin: 3 });
       chmodSync(path, 0o600);
       files.push(path);
-      // Tencent's reference client keeps a QR session for at most five minutes;
-      // the server can return expired sooner. This is a local refresh deadline.
+      // Refresh the QR locally after at most five minutes; the server can
+      // return expired sooner. This is a local refresh deadline.
       const expiresAt = Math.min(Date.now() + 300000, deadline);
       const expires_at = new Date(expiresAt).toISOString();
       await onQr({ event: 'qr', qr_number: round, id_prefix: qr.qrcode.slice(0, 8), file: path, expires_at, expiry_source: 'client_refresh_limit' });
@@ -124,7 +124,7 @@ export async function login(store, ilink, { directory, timeout = 600000, onQr = 
         }
         if (status.status === 'scaned') pendingVerifyCode = undefined;
         if (status.status === 'verify_code_blocked') fail('verification_blocked', '微信提示验证码错误次数过多，登录已停止，请稍后重新扫码。');
-        if (status.status === 'binded_redirect') fail('already_bound', '微信提示已绑定。请检查现有 status/health；此响应没有提供新的凭证。');
+        if (status.status === 'binded_redirect') fail('already_bound', '微信提示已绑定。请检查现有 Muse Link 服务的 status/health；此响应没有提供新的凭证。');
         if (status.status === 'scaned_but_redirect') {
           const redirect = status.redirect_host ?? '';
           host = wechatBase(redirect.includes('://') ? redirect : `https://${redirect}`);

@@ -4,9 +4,9 @@
 
 先请用户在微信“我 → 设置 → 插件”确认并启用 ClawBot。部署使用 Muse 自己的云端，不要求额外公网 IP；云实例必须能持续运行桥、访问腾讯 HTTPS 接口并注册平台原生 hooks。
 
-实现参考 [UPGPTs 教程](https://upgpts.com/en/tutorials/muse/muse-wechat) 与其引用的 [腾讯 iLink 协议](https://github.com/tencent/openclaw-weixin/blob/HEAD/docs/protocol_zh_CN.md)。腾讯文档说明该协议描述参考客户端行为，完整服务端契约仍须实测。[接口对照及教程差异](REFERENCE.md) 记录了长轮询、验证码、媒体能力和验收边界。
+本项目直接使用微信 iLink 协议。[接入与协议说明](REFERENCE.md) 记录了长轮询、验证码、媒体能力和验收边界，实际账号仍须按部署流程验证。
 
-必须交付两部分：常驻服务接收微信消息并持久化；原生 Muse hook 唤醒具有真实工具权限的任务 worker，再调用 muse reply 直接回传。hook 检测脚本只负责提示新事件，不会自行执行 Muse。教程没有公开 hooks 注册 API，所以必须使用当前 Muse 环境真实提供的协议，不虚构注册成功。
+必须交付两部分：常驻服务接收微信消息并持久化；原生 Muse hook 唤醒具有真实工具权限的任务 worker，再调用 muse reply 直接回传。hook 检测脚本只负责提示新事件，不会自行执行 Muse。注册 hook 必须使用当前 Muse 环境实际提供的工具及协议，并核实注册结果。
 
 ## 安装
 
@@ -58,7 +58,7 @@ muse-link login verify --code-file '<日志中的 code_file>' --text - <<'WECHAT
 WECHAT_CODE
 ```
 
-源代码运行时把命令改为 `node src/cli.mjs login verify ...`。正文仅能为数字，上述文字占位符必须替换。验证码从标准输入传入，不放进命令参数；命令只输出 submitted=true，不代表已登录。等待原登录日志 logged_in=true；若再次 verification_required，使用新的 code_file 并请用户核对手机。临时文件在读取、取消或超时后删除，验证码不写入会话数据库。verification_blocked 表示微信阻止继续尝试，停止并稍后重新扫码；already_bound 不代表拿到了新凭证，应检查原服务健康。
+源代码运行时把命令改为 `node src/cli.mjs login verify ...`。正文仅能为数字，上述文字占位符必须替换。验证码从标准输入传入，不放进命令参数；命令只输出 submitted=true，不代表已登录。等待原登录日志 logged_in=true；若再次 verification_required，使用新的 code_file 并请用户核对手机。临时文件在读取、取消或超时后删除，验证码不写入会话数据库。verification_blocked 表示微信阻止继续尝试，停止并稍后重新扫码；already_bound 不代表拿到了新凭证，应检查现有 Muse Link 服务的 status/health。
 
 ## 启动与检查
 

@@ -2,7 +2,7 @@
 
 先读README.md、docs/MUSE.md、docs/PRODUCTION.md。已有Muse Link按docs/给Muse升级的指令.txt操作，保留配置/账号/状态。新安装确认Node.js24+、systemd、持久化本地磁盘、网络代理和真实Muse hooks权限，以Muse HOME属主执行bash deploy/install.sh，不sudo整个安装器，不运行两套微信接收进程。
 
-参考教程https://upgpts.com/en/tutorials/muse/muse-wechat 与腾讯协议https://github.com/tencent/openclaw-weixin/blob/HEAD/docs/protocol_zh_CN.md 。需要扫码时按MUSE.md运行独立login，立即展示每条新qr的原图，写明编号和客户端刷新时间；verification_required时按实际手机数字和最新code_file从stdin提交，不放进参数或日志。submitted不等于登录成功，等logged_in=true后再启动服务。微信账号是否支持ClawBot由实际情况决定。
+接入流程和协议细节见docs/REFERENCE.md。需要扫码时按MUSE.md运行独立login，立即展示每条新qr的原图，写明编号和客户端刷新时间；verification_required时按实际手机数字和最新code_file从stdin提交，不放进参数或日志。submitted不等于登录成功，等logged_in=true后再启动服务。微信账号是否支持ClawBot由实际情况决定。
 
 启动后status.version须为0.4.0-rc.4、health至少一次轮询成功。用真实Muse原生hooks注册，采用docs/MUSE.md完整worker指令，记录实际标识/状态/检测间隔，先dry_run再启用，dry_run不领取任务。必须有常驻连接进程和具备工具权限的真实Muse worker，不能只安装接收服务或假称hook注册成功。
 

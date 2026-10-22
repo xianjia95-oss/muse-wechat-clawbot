@@ -6,7 +6,7 @@
 
 一个微信账号、一个常驻实例、一个持久化本地磁盘目录。Node.js 24 + SQLite WAL/FULL，不需要 Redis、数据库服务或公网入站端口。Linux 部署使用 systemd，Windows 可用于开发和协议测试。不要在 NFS/SMB、临时容器层或多副本共享卷上放置 state_dir；不提供跨主机高可用。Muse 云实例休眠时，桥也无法接收消息。
 
-服务、登录、导入、维护、备份和恢复均使用 state_dir 同级的 SQLite 独占锁；更换 HTTP 端口也不能启动第二个所有者。进程被强制终止后由操作系统释放锁，不依赖删除 PID 文件。不要删除运行中的 `.lock.sqlite` 或其辅助文件。`inbox count` 是只读诊断，服务运行时可用。
+服务、登录、维护、备份和恢复均使用 state_dir 同级的 SQLite 独占锁；更换 HTTP 端口也不能启动第二个所有者。进程被强制终止后由操作系统释放锁，不依赖删除 PID 文件。不要删除运行中的 `.lock.sqlite` 或其辅助文件。`inbox count` 是只读诊断，服务运行时可用。
 
 API 只监听 loopback，除存活探针外都需要私密 token。用 init 生成真实配置；示例 token 无法通过校验。token 接受 32..256 个可见 ASCII 字符，不能含空格或控制字符，应随机生成，不使用公开或易猜值；已有随机十六进制和 Base64 token 可继续使用。限制 media_roots 到实际生成目录；不放入 HOME 根目录。systemd 的 PrivateTmp 隔离 /tmp，跨进程生成文件应导出到持久化 workspace。配置、SQLite、上传快照和备份含凭据或用户内容，不能上传公开仓库；Linux 目录使用 0700，文件使用 0600，Windows 需按服务账号设置目录 ACL。
 
