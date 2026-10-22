@@ -55,6 +55,7 @@ export function health(bridge) {
   const last = Date.parse(status.poll.last_ok_at ?? '');
   if (!Number.isFinite(last) || Date.now() - last > limits.poll_stale_ms || !['waiting', 'ok'].includes(status.poll.state) || status.poll.error) problems.push('wechat_poll_unhealthy');
   if (queue.oldest_ready_ms !== null && Date.now() - queue.oldest_ready_ms > limits.backlog_warn_ms) problems.push('worker_backlog');
+  if (queue.stalled_leases) problems.push('worker_lease_stalled');
   if (queue.pending >= limits.max_pending_events) problems.push('inbox_capacity');
   if (queue.unknown_sends) problems.push('send_outcome_unknown');
   if (queue.unresolved_steps) problems.push('task_step_needs_review');

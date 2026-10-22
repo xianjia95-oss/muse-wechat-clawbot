@@ -94,7 +94,9 @@ export class Ilink {
       });
       const text = await boundedJsonText(response.body);
       if (response.statusCode !== 200) throw new BridgeError('upstream_http', `WeChat HTTP ${response.statusCode}`, 502);
-      const parsed = text.trim() ? parseWire(text) : {};
+      // An empty HTTP 200 is not a JSON receipt. Preserve uncertainty rather
+      // than acknowledging a task whose delivery cannot be established.
+      const parsed = parseWire(text);
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Invalid iLink response');
       if ([parsed.ret, parsed.errcode].some((code) => Number(code) === -14)) throw new BridgeError('session_expired', '微信登录已过期，请重新扫码。', 401);
       if (Number(parsed.ret ?? 0) !== 0 || Number(parsed.errcode ?? 0) !== 0) {

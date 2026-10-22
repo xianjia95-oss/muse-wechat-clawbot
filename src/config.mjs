@@ -1,15 +1,15 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { fail, integer } from './errors.mjs';
 
-export const VERSION = '0.4.0-rc.4';
+export const VERSION = '0.4.0-rc.5';
 export const OPS_DEFAULTS = Object.freeze({
   max_inflight_sends: 64, max_peer_sends: 16, max_pending_events: 2000,
   min_free_bytes: 128 * 1024 * 1024, max_state_bytes: 1024 * 1024 * 1024,
   max_outbox_bytes: 512 * 1024 * 1024, max_http_requests: 128,
-  backlog_warn_ms: 300000, poll_stale_ms: 120000,
+  backlog_warn_ms: 300000, poll_stale_ms: 120000, worker_stale_ms: 600000,
   event_retention_days: 7, send_retention_days: 90, failed_media_retention_days: 7,
   maintenance_interval_ms: 3600000, shutdown_timeout_ms: 180000,
 });
@@ -22,8 +22,14 @@ export function privateJson(path, value) {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const temp = `${path}.${randomBytes(8).toString('hex')}.tmp`;
   writeFileSync(temp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+  const fd = openSync(temp, 'r+');
+  try { fsyncSync(fd); } finally { closeSync(fd); }
   renameSync(temp, path);
   chmodSync(path, 0o600);
+  if (process.platform !== 'win32') {
+    const directory = openSync(dirname(path), 'r');
+    try { fsyncSync(directory); } finally { closeSync(directory); }
+  }
 }
 
 export function initConfig(path = defaultConfigPath()) {

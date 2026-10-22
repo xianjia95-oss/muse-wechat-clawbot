@@ -4,6 +4,10 @@ health 通过和最近 29 条 accepted 之类的历史指标，不能证明当�
 
 连续消息被耗时工具挡住时，按 [连续消息流程](BURST_MESSAGES.md) 读取逐条回执，并同时调整实际 worker/hook。rc.4 修复 accepted 恢复项误报空队列，另提供不阻塞模型消息循环的 Linux 后台工具和结果唤醒；仅升级服务无法自动改变同步等待外部 API 的任务指令。
 
+rc.5 的媒体 reply 使用 `--async`：先保存正文/媒体路径/稳定 request_id，再提交，返回 pending 后继续处理短消息，逐轮查 request，accepted 才结清工具通知。桥将上传与实际 chat 提交分开；不同任务可交错到达，每项内部顺序保持。unknown 不盲目重发。
+
+health 的 worker_lease_stalled 表示有效租约超过 worker_stale_ms（默认 10 分钟）没有领取/续租/checkpoint 活动；先核实原 worker 和工具，不能据此清租约。后台 job 若 attention_required 且无法正常 cancel/settle，按 BURST_MESSAGES.md 核对远端结果和原进程组，再显式 reconcile --reviewed --text -；仍有活跃进程会拒绝，interrupted 只表示本地监督结束，不表示业务完成。
+
 ## 现有 rc.2 可直接采集
 
 下载新源码到独立目录，不运行安装器，也不停止现有服务。Node.js 24 可直接运行这个只读脚本，无需 npm ci：

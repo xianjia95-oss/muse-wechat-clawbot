@@ -43,6 +43,7 @@ export class Store {
     this.transaction(() => {
       const columns = this.db.prepare('PRAGMA table_info(events)').all();
       if (!columns.some((column) => column.name === 'lease_token')) this.db.exec("ALTER TABLE events ADD COLUMN lease_token TEXT");
+      if (!columns.some((column) => column.name === 'lease_activity_ms')) this.db.exec('ALTER TABLE events ADD COLUMN lease_activity_ms INTEGER');
       this.db.exec(`CREATE TABLE IF NOT EXISTS task_steps (
         event_id TEXT NOT NULL, step TEXT NOT NULL, state TEXT NOT NULL, lease_token TEXT NOT NULL,
         result TEXT, updated_ms INTEGER NOT NULL, PRIMARY KEY(event_id,step));
@@ -87,10 +88,10 @@ export class Store {
     return this.transaction(() => {
       const now = Date.now();
       const rows = this.db.prepare('SELECT id,body FROM events WHERE acked_ms IS NULL AND lease_until<=? ORDER BY received_ms,id LIMIT ?').all(now, limit);
-      const update = this.db.prepare('UPDATE events SET lease_until=?,lease_token=? WHERE id=?');
+      const update = this.db.prepare('UPDATE events SET lease_until=?,lease_token=?,lease_activity_ms=? WHERE id=?');
       return rows.map((row) => {
         const lease_token = randomBytes(24).toString('hex');
-        update.run(now + leaseMs, lease_token, row.id);
+        update.run(now + leaseMs, lease_token, now, row.id);
         return { ...JSON.parse(row.body), lease_token, lease_until: now + leaseMs };
       });
     });
@@ -105,13 +106,14 @@ export class Store {
   renew(id, token, leaseMs) {
     this.requireLease(id, token);
     const until = Date.now() + leaseMs;
-    this.db.prepare('UPDATE events SET lease_until=? WHERE id=? AND lease_token=?').run(until, id, token);
+    this.db.prepare('UPDATE events SET lease_until=?,lease_activity_ms=? WHERE id=? AND lease_token=?').run(until, Date.now(), id, token);
     return { event_id: id, lease_until: until };
   }
   steps(id) { return this.db.prepare('SELECT step,state,result,updated_ms FROM task_steps WHERE event_id=? ORDER BY step').all(id).map((row) => ({ ...row, result: row.result === null ? null : JSON.parse(row.result) })); }
   checkpoint(id, token, step, phase, result, reviewed = false) {
     return this.transaction(() => {
       this.requireLease(id, token);
+      this.db.prepare('UPDATE events SET lease_activity_ms=? WHERE id=?').run(Date.now(), id);
       const prior = this.db.prepare('SELECT * FROM task_steps WHERE event_id=? AND step=?').get(id, step);
       if (prior?.state === 'completed') return { cached: true, step, state: 'completed', result: JSON.parse(prior.result) };
       if (phase === 'started' && prior) fail('step_uncertain', 'This step was already started; verify its external outcome before resolving it.', 409);
@@ -122,13 +124,15 @@ export class Store {
       return { cached: false, step, state: phase, result: result ?? null };
     });
   }
-  queueStats() {
+  queueStats(staleMs = 600000) {
     const now = Date.now();
     const pending = this.db.prepare('SELECT count(*) AS n,min(received_ms) AS oldest,min(CASE WHEN lease_until>? THEN lease_until END) AS next_expiry FROM events WHERE acked_ms IS NULL').get(now);
     const leased = this.db.prepare('SELECT count(*) AS n FROM events WHERE acked_ms IS NULL AND lease_until>?').get(now).n;
     return {
       pending: pending.n, leased, ready: pending.n - leased,
       oldest_pending_ms: pending.oldest, next_lease_expiry_ms: pending.next_expiry,
+      stalled_leases: this.db.prepare('SELECT count(*) AS n FROM events WHERE acked_ms IS NULL AND lease_until>? AND coalesce(lease_activity_ms,received_ms)<?').get(now, now - staleMs).n,
+      oldest_lease_activity_ms: this.db.prepare('SELECT min(coalesce(lease_activity_ms,received_ms)) AS n FROM events WHERE acked_ms IS NULL AND lease_until>?').get(now).n,
       oldest_ready_ms: this.db.prepare('SELECT min(received_ms) AS n FROM events WHERE acked_ms IS NULL AND lease_until<=?').get(now).n,
       unknown_sends: this.db.prepare("SELECT count(*) AS n FROM sends WHERE state='unknown' AND coalesce(json_extract(result,'$.reviewed'),0)=0").get().n,
       unresolved_steps: this.db.prepare("SELECT count(*) AS n FROM task_steps s JOIN events e ON e.id=s.event_id WHERE s.state='started' AND (s.lease_token<>e.lease_token OR e.lease_until<=?)").get(now).n,

@@ -12,7 +12,7 @@ import { Bridge } from '../src/bridge.mjs';
 import { MuseAdapter } from '../src/muse.mjs';
 import { BridgeError } from '../src/errors.mjs';
 import { createApi } from '../src/server.mjs';
-import { fixture, session, reply } from './helpers.mjs';
+import { fixture, session, reply, deferred } from './helpers.mjs';
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII=', 'base64');
 // A container header for wire tests; playback/codec compatibility needs live QA.
@@ -35,6 +35,28 @@ function incoming(bridge, id = 'media') {
   bridge.ingest({ msgs: [{ message_id: id, from_user_id: 'owner', context_token: 'media-context', item_list: [{ type: 1, text_item: { text: '请把生成的图片发来' } }] }] });
   return `muse:${id}`;
 }
+
+test('async failures remain unacked and cannot blindly resend; upload completion rechecks the lease', async (t) => {
+  for (const mode of ['unknown', 'stale']) {
+    const gate = deferred(), entered = deferred(); let sends = 0;
+    const { bridge, image, store, config } = assets(t, {
+      uploadMedia: async (_, to, record) => { entered.resolve(); await gate.promise; return mediaItem(record, 'reference'); },
+      sendMedia: async () => { sends++; throw new BridgeError('upstream_unknown', 'uncertain', 502); },
+    });
+    config.require_lease_token = true;
+    const muse = new MuseAdapter(bridge), id = incoming(bridge, mode), task = (await muse.next()).tasks[0];
+    const body = { event_id: id, lease_token: task.lease_token, media: [{ type: 'image', path: image }], async: true };
+    const submitted = await muse.reply(body); assert.equal(submitted.state, 'pending');
+    await entered.promise;
+    if (mode === 'stale') store.db.exec('UPDATE events SET lease_until=0');
+    gate.resolve(); await bridge.close();
+    assert.equal(store.event(id).acked_ms, null);
+    assert.equal(store.send(submitted.request_id).state, mode === 'unknown' ? 'unknown' : 'failed');
+    assert.equal(sends, mode === 'unknown' ? 1 : 0);
+    if (mode === 'unknown') await assert.rejects(muse.reply(body), { code: 'send_unknown' });
+    assert.ok(store.db.prepare("SELECT 1 FROM events WHERE json_extract(body,'$.alert.code')='async_reply_failed'").get());
+  }
+});
 
 test('media input requires bounded typed absolute paths and CDN hosts cannot leak credentials', () => {
   for (const media of [null, {}, [{ type: 'file', path: '/tmp/x' }], [{ type: 'image', path: 'https://example.com/x.png' }],

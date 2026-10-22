@@ -1,4 +1,4 @@
-请把现有 Muse Link 升级到上传的 v0.4.0-rc.4 生产加固候选版。保留微信账号、token、原配置、SQLite 和生成文件，健康会话无需重新扫码。不把候选版称为已通过生产验收。
+请把现有 Muse Link 升级到上传的 v0.4.0-rc.5 生产加固候选版。保留微信账号、token、原配置、SQLite 和生成文件，健康会话无需重新扫码。不把候选版称为已通过生产验收。
 
 先读 docs/PRODUCTION.md、docs/MUSE.md、docs/API.md。处理完已领取任务或记录交接后，暂停原生微信 hook、停止 muse-link 服务，再从新解压目录 bash deploy/install.sh。安装器先把依赖装入候选 releases 目录，离线备份原状态后切换 current，保留 previous；不自动启动服务。不运行两套同账号轮询，不导入或删除原 Muse Link 数据库。
 
@@ -8,8 +8,12 @@
 
 unknown/rejected不自动重发；核对微信和request结果，不换ID绕过。429/503/507先核对状态、修复或等待后同ID同内容重试。failed且retryable可用原文字和文件路径续传，不重做生成。步骤started未核对不能最终回复或ack。超过保留期限后旧ID不再永久去重，业务侧保留交接记录。
 
-启动服务，status必须是version=0.4.0-rc.4，health需至少一轮成功长轮询；检查capabilities.send含text/image/video。真实hook先dry_run再启用，记录标识、间隔和工具权限。按docs/给Muse生产验收的指令.txt执行手机文字/真实工具/图片/视频验收、故障恢复、备份恢复/回滚演练及实际72小时观测，给出通过/失败/未执行和证据位置。
+启动服务，status必须是version=0.4.0-rc.5，health需至少一轮成功长轮询；检查capabilities.send含text/image/video。真实hook先dry_run再启用，记录标识、间隔和工具权限。按docs/给Muse生产验收的指令.txt执行手机文字/真实工具/图片/视频验收、故障恢复、备份恢复/回滚演练及实际72小时观测，给出通过/失败/未执行和证据位置。
 
 恢复备份会暂停轮询、任务领取和新发送，先核对备份后已经执行的微信/外部动作，再人工approve；不能为了启动方便直接解除闸门。生产问题需代码回滚时，暂停hook、停服务、排空任务并核对unknown/工具步骤，再运行~/.local/share/muse-link/rollback.sh，只回滚代码不回退状态。具体操作以PRODUCTION.md为准，不公开私密备份或凭据。
 
 连续消息与长工具须同时按 docs/BURST_MESSAGES.md 更新实际 worker/hook，使用私密后台工具结果和真实队列排空循环，核实取消额外的 90 秒消息去重；不能只升级后台。验收增加“110 秒后台无副作用等待期间连续 5 条短消息均收到回复”，逐条保存提交/accepted/手机时间。
+
+rc.5 的媒体回复必须采用 --async，提交前保存原正文、文件路径和原任务 completion.request_id，返回 submitted/pending 后保存回执并继续处理短消息。每轮查原 request，pending 时续租，只有 accepted 才结清后台工具通知；桥全部 accepted 后自动 ack。不要在循环中同步等上传，也不要因为 202 就宣称手机收到。强制重启后按回执恢复，不自动重发 unknown/rejected，不重做生成。
+
+新增 worker_stale_ms 默认 600000，健康检查会指出有效租约长期无活动，不能据此清租约。孤儿后台任务先核对外部结果及本地进程；reconcile --reviewed --text - 只在监督器/原进程组已退出时将记录转 interrupted，释放名额但保留 ID，通知仍待结清，不会回复或 ack。不要直接改 job.json、删除记录或锁来绕过保护。

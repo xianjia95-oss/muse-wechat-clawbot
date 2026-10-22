@@ -22,7 +22,11 @@ rc.4 遇到已经 accepted、但 ack 尚未完成的恢复记录时，会确认�
 
 桥从已领取的事件中查找收件人，自动生成稳定 request_id。微信确认全部文字分段及媒体消息后，才 ack 事件；响应包括 state=accepted、event_completed=true 和 timing。若网络不确定或发送被拒绝，保留事件且不自动重发。崩溃发生在发送成功、ack 之前时，后续 muse/tasks 会依据持久化发送结果完成事件，避免再次交给 Muse 执行。
 
-v0.4.0-rc.4 可附 `"media":[{"type":"image","path":"/absolute/result.png"},{"type":"video","path":"/absolute/result.mp4"}]`，有媒体时 text 可省略。最多 4 个，仅接受桥所在机器上的绝对路径，并检查 config.media_roots。图片 20 MiB、视频 50 MiB 本地上限。桥按文字分段、media 数组顺序发送；CLI 多个 --image 排在多个 --video 前。详见 [媒体说明](MEDIA.md)。
+rc.5 新增可选 `"async":true`（布尔值；CLI 为 `--async`）。桥先验证并持久化发送意图，返回 HTTP 202、submitted=true、state=pending、request_id、event_completed=false；这仅表示已提交后台。使用 `muse-link request '<request_id>'` 查询持久化回执，只有 accepted 才结束结果通知。已经 accepted 的缓存回复仍返回 200。异步最终回复在全部消息 accepted 后自动 ack；失败或 unknown 保留事件，并产生安全告警。默认同步调用保持原行为。
+
+异步发送在同一 daemon 内执行，不是持久化的自动重试队列。进程强制中断后结果按现有恢复规则核对，不能认为仍在后台发送。调用方须保存原任务、原文字/媒体路径和稳定 request_id；pending 时继续续租、处理其他消息，并逐轮查询回执，不能同步循环等这一项。unknown/rejected 不自动重发，failed 仅在核对后以原请求显式续传。
+
+v0.4.0-rc.5 可附 `"media":[{"type":"image","path":"/absolute/result.png"},{"type":"video","path":"/absolute/result.mp4"}]`，有媒体时 text 可省略。最多 4 个，仅接受桥所在机器上的绝对路径，并检查 config.media_roots。图片 20 MiB、视频 50 MiB 本地上限。桥按文字分段、media 数组顺序发送；CLI 多个 --image 排在多个 --video 前。详见 [媒体说明](MEDIA.md)。
 
 进度回复额外传 `"mode":"progress","reply_id":"started"`。progress 需要每条进度的稳定 reply_id，成功后不结束任务。最终回复 mode 默认为 final，不能指定 reply_id、to、binding 或 request_id，避免更换编号绕过去重或发错用户。两个模式均支持可选 model_ready_at。
 
@@ -53,7 +57,7 @@ request_id 必填，也可用 Idempotency-Key 请求头传递。binding 可省�
 | timing 字段 | 含义 |
 | --- | --- |
 | model_to_submit_ms | 客户端声明的结果就绪到桥收到请求的间隔，依赖准确记录与同机时钟。 |
-| queue_ms | 等待同一收件人上一条发送完成的时间。 |
+| queue_ms | 各分段等待同一收件人实际 chat 提交通道的累计时间，不含媒体上传。 |
 | upstream_ms | 上传参数、CDN 上传及消息发送的累计耗时；纯文字等于消息发送耗时。 |
 | media_prepare_ms | 检查并流式加密媒体快照的耗时。 |
 | media_upload_ms | 获取上传参数和向 CDN 上传的耗时，含上传重试。 |
@@ -65,7 +69,7 @@ model_to_submit_ms 很大时检查 Muse 何时调用发送工具；upstream_ms �
 
 ## 结果查询和重试
 
-`GET /v1/requests/<request_id>` 返回 state 和 result。相同 ID 和内容的并发请求合并；成功后再次提交返回缓存；换内容复用 ID 返回 409。同一收件人保持顺序，不同收件人可并行。
+`GET /v1/requests/<request_id>` 返回 state 和 result。相同 ID 和内容的并发请求合并；成功后再次提交返回缓存；换内容复用 ID 返回 409。同一收件人的实际 chat 调用串行，媒体准备/上传不占该通道。每个请求内部的文字、附件保持原顺序；不同请求可交错，后提交的短文字可能先于正在上传的图片到达。不同收件人可并行。
 
 | 状态 | 处理 |
 | --- | --- |
@@ -85,11 +89,13 @@ CDN 上传在 media_timeout_ms（默认 120000）总时限内最多尝试三次�
 
 - `GET /v1/events?limit=20&lease=30m&wait=30s`：领取。limit 1..100、lease 1 秒..1 小时、wait 0..60 秒；等待请求有事件时立即返回。
 - `POST /v1/events/ack`：正文 `{"event_ids":["muse:123"],"lease_token":"当前领取 token"}`；多事件不同 token 用 lease_tokens 对象按 event_id 映射，处理完确认。
-- `GET /v1/status`：version、capabilities、登录、接收状态、收件箱数量、发送中请求数；升级后应显示 version=0.4.0-rc.4、capabilities.send 含 image/video。
+- `GET /v1/status`：version、capabilities、登录、接收状态、收件箱数量、发送中请求数；升级后应显示 version=0.4.0-rc.5、capabilities.send 含 image/video。
 - `GET /v1/metrics`：最近 300 请求的状态计数，以及成功请求耗时 p50/p95。失败和 pending 不混入成功耗时。
 - `GET /healthz`：进程存活；微信连通性看 status 或 muse-link health。
 
 事件按 event_id 去重，领取有租约。会话、上下文、事件和发送状态在 state_dir 的 SQLite 中。接收批次的事件、上下文和游标原子提交。入站文本和微信语音转写可读；暂不支持的附件通过 media_errors 报告。
+
+空或非字符串 get_updates_buf 不覆盖已有游标；HTTP 200 的空白响应不是 JSON 成功回执，chat 发送会保持 unknown、不 ack、不自动重发。有效 JSON `{}` 保持腾讯协议的兼容行为，不要求必须含 ret。
 
 ## 生产候选版的租约、步骤与健康
 
@@ -103,5 +109,7 @@ rc.3 的 stale_lease 带 lease_reason（missing_token / token_mismatch / lease_e
 - `POST /v1/muse/checkpoints`：`{"event_id":"muse:123","lease_token":"...","step":"tool-action","phase":"started","result":null}`；工具完成后同 step、phase=completed，result 最多 16 KiB。完成的步骤返回 cached=true，应跳过工具。重投后的 started 无法再次开始，需核对后用 reviewed=true 完成记录；遗留 started 阻止最终回复和 ack。步骤和外部系统不在同一事务，不能保证外部动作恰好一次。
 - `POST /v1/requests/<id>/review`：`{"reviewed":true,"note":"核对记录，最多1000字符"}`。仅允许 unknown，状态仍为 unknown，resend_allowed=false；此操作解除未核对告警，不授权重发。
 - `GET /v1/health`：认证的 readiness，200 healthy=true 或 503 healthy=false；problems、queue、storage 及 status。检查轮询新鲜度、存储、积压、未知发送、遗留工具步骤和恢复闸门。
+
+领取、续租、checkpoint 会持久化刷新事件的 lease_activity_ms。queue 增加 stalled_leases、oldest_lease_activity_ms；活跃租约超过 operations.worker_stale_ms（默认 10 分钟）没有上述活动时，health 返回 worker_lease_stalled。它是待检查提示，不证明 worker 已死亡，不修改或抢占租约；旧记录无活动字段时保守使用接收时刻，正常续租后刷新。
 
 容量满返回 429 queue_full / 503 http_capacity 或 inbox_full，存储预算返回 507 storage_pressure，维护/停机排空返回 503；429/503/507 带 Retry-After:5。检查 request 后再决定是否用相同内容重试。具体预算、90 天幂等保留窗口、恢复后的强制核对、备份与上线条件见 [生产运行](PRODUCTION.md)。

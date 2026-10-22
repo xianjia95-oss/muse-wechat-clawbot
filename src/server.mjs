@@ -74,7 +74,10 @@ export function createApi(bridge) {
         if (body && typeof body === 'object' && !body.request_id) body.request_id = request.headers['idempotency-key'];
         return json(response, 200, await bridge.send(body));
       }
-      if (route === 'POST /v1/muse/replies') return json(response, 200, await muse.reply(await readJson(request)));
+      if (route === 'POST /v1/muse/replies') {
+        const result = await muse.reply(await readJson(request));
+        return json(response, result.submitted ? 202 : 200, result);
+      }
       if (route === 'POST /v1/muse/renew') return json(response, 200, muse.renew(await readJson(request)));
       if (route === 'POST /v1/muse/checkpoints') return json(response, 200, muse.checkpoint(await readJson(request)));
       if (route === 'GET /v1/events' || route === 'GET /v1/muse/tasks') {

@@ -28,4 +28,4 @@ npm start
 - [生产部署与验收](docs/PRODUCTION.md)
 - [更新日志](CHANGELOG.md)
 
-当前版本：`v0.4.0-rc.4`（预发布） · [MIT License](LICENSE)
+当前版本：`v0.4.0-rc.5`（预发布） · [MIT License](LICENSE)

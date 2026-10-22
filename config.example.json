@@ -24,6 +24,7 @@
     "max_http_requests": 128,
     "backlog_warn_ms": 300000,
     "poll_stale_ms": 120000,
+    "worker_stale_ms": 600000,
     "event_retention_days": 7,
     "send_retention_days": 90,
     "failed_media_retention_days": 7,

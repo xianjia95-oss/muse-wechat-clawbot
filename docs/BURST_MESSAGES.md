@@ -22,6 +22,8 @@ status 的 worker 计数从本次进程启动起算；SQLite 的 69 条 accepted
 2. 普通短消息直接回复。预计耗时较长的外部 HTTP、生成或测试，先以稳定 reply-id 发 progress，持久化原领取文件、稳定工具步骤名、job ID、脚本和结果路径；不要先 ack。原本需要 checkpoint 的操作，仍先写 started，再启动工具。
 3. 用真实 Muse 工具权限准备可信的本地 `.mjs` 脚本，将它交给下面的后台监督器。`start` 仅等本地进程启动，返回后继续消息循环；不能同步等脚本退出，也不能改成反复等待同一个 shell 工具。不要将微信正文当成脚本/命令直接执行。凭据放私密配置，由脚本读取，不放命令参数或公开日志。
 4. 每轮查看 `tool-job list`，结合交接记录处理未回传的终态结果。成功退出不代表业务成功，须核对 HTTP 状态/实际产物；完成步骤后，用原始当前有效 token 提交原事件的最终回复。后来完成的长任务用自然语言指出对应的原请求，不能把它冒充当前短消息的回答。只有 accepted 后才将该 job 通知 settle。
+
+   rc.5 媒体回复加 `--async`，先保存原正文/路径/稳定 request_id，再提交并保存回执。pending 仅表示桥后台正在处理，worker 必须继续处理短消息，逐轮通过 `muse-link request '<id>'` 检查回执、必要时续租，不能同步等上传。accepted 后桥自动 ack，再 settle 工具通知；failed/unknown/rejected 保留交接并按协议核对。只升级 daemon、仍同步等 muse reply 返回，单个模型 worker 依旧会被慢上传挡住。
 5. 失败、超时、取消、输出过量或 attention_required 时，核对本地进程和远端实际结果。工具不会自动重跑，started 不能凭猜测改 completed。向 Muse 主聊天或微信安全进度说明失败，继续处理其他消息；不要为了清空队列最终 ack 未完成任务。原 task/token/结果继续私密保留，按正常协议处理续租、恢复和人工核对。
 
 ## 后台工具监督器
@@ -37,6 +39,10 @@ node "$JOB_HELPER" list
 node "$JOB_HELPER" pending
 # 需要取消时，只请求终止本地工具；继续查看终态：
 node "$JOB_HELPER" cancel --id '<同一job编号>'
+# 监督器意外消失：先核对工具进程组已退出及远端结果，再显式关闭本地监督记录：
+node "$JOB_HELPER" reconcile --id '<同一job编号>' --reviewed --text - <<'JOB_REVIEW'
+这里填写真实核对结果、外部动作是否完成和后续处置；不凭猜测认定成功。
+JOB_REVIEW
 # 已核对结果及微信 accepted，或明确记录失败处置后：
 node "$JOB_HELPER" settle --id '<同一job编号>' --reviewed
 ```
@@ -47,7 +53,7 @@ job ID 使用 event_id 与稳定步骤名的哈希等稳定值，只能包含字
 
 同时最多 2 个未完成 job，最多保留 256 个记录。满时先处理现有任务；新长请求保存为待执行交接项并发送进度，有空位才启动，不能静默丢弃。启动前先检查容量，启动失败仍须核实 started 步骤的实际状态。定期核对并归档已结清记录；移走记录后监督器不再为那个旧 ID 保留去重，业务侧仍须保留原事件/checkpoint/结果账本，不能重放旧任务。后台目录不属于桥的 SQLite 备份，不能在有活跃进程时删除锁文件或记录。默认截止 120 秒，最大 20 分钟；真正生图可按服务约定给足时间，连通性探测宜另设较短连接和总时限，不能把所有生图一律限制为 15 秒。
 
-时限、cancel 和 SIGTERM 会终止监督器所管理的本地 Linux 进程组；脚本不能自行创建脱离该进程组的守护进程。远端 HTTP 操作可能已经发生，终止不代表撤回。监督器遭 SIGKILL 时子进程可能仍在运行；list/pending 会对可观察到的监督器消失给出 attention_required，PID 存活也不是工作正确的证明。此类记录保留并需人工核对，不自动再运行。长任务按原协议每 5 分钟续租；换班前核实 worker、工具进程和交接记录，不读数据库 token 强行接管。
+时限、cancel 和 SIGTERM 会终止监督器所管理的本地 Linux 进程组；脚本不能自行创建脱离该进程组的守护进程。远端 HTTP 操作可能已经发生，终止不代表撤回。监督器遭 SIGKILL 时子进程可能仍在运行；list/pending 使用 Linux 启动身份识别可观察到的监督器消失，给出 attention_required，PID 存活也不是工作正确的证明。rc.5 的 reconcile 要求私密 stdin 核对说明（最多 8192 字节）和 --reviewed；在启动/监督锁内重读状态，监督器或原工具进程组仍存活时拒绝，不发送信号。关闭后为 interrupted，释放两项活动名额，但不表示业务成功；原 ID 和核对说明保留，不重跑、不 checkpoint、不回复、不 ack，通知仍须后续 settle。缺少进程身份的旧记录保守拒绝自动结案。私密核对说明不在 list/start 缓存输出中展示。工具执行前先确认 durable 元数据已记录本进程与启动代次，避免 spawn 与写盘之间被杀后产生未登记副作用。长任务按原协议每 5 分钟续租；换班前核实 worker、工具进程和交接记录，不读数据库 token 强行接管。
 
 ## hook 要同时发现新消息和工具结果
 

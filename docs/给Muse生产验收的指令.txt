@@ -1,4 +1,4 @@
-请在你的真实 Meta Muse 云端验收 Muse Link v0.4.0-rc.4，按 docs/PRODUCTION.md 执行，不把候选版或本地测试当作已生产验收。
+请在你的真实 Meta Muse 云端验收 Muse Link v0.4.0-rc.5，按 docs/PRODUCTION.md 执行，不把候选版或本地测试当作已生产验收。
 
 先检查真实环境、Node.js 24、持久化本地磁盘、systemd、代理和 Muse hooks 权限。若已部署，按 docs/给Muse升级的指令.txt 升级，保留配置、登录与状态；不得运行两套同账号轮询。使用 docs/MUSE.md 的完整 worker 协议，每个回复/ack 带当前 lease_token，长任务续租，外部工具执行前后记录 checkpoint。started 未完成的步骤必须核对，不能自动重复执行。
 
@@ -13,3 +13,5 @@
 交付一份验收结果表，每项写“通过 / 失败 / 未执行”、证据位置和未解决问题，附脱敏的观测摘要。只有真实 hooks、手机收取/播放、故障恢复、备份/回滚和实际 72 小时全部完成，才判断这个部署是否可上线。不要将 token、验证码、session、原始数据库、完整私密备份或用户正文放进公开仓库。
 
 连续消息与长工具须同时按 docs/BURST_MESSAGES.md 更新实际 worker/hook，使用私密后台工具结果和真实队列排空循环，核实取消额外的 90 秒消息去重；不能只升级后台。验收增加“110 秒后台无副作用等待期间连续 5 条短消息均收到回复”，逐条保存提交/accepted/手机时间。
+
+rc.5 增加慢媒体上传验收：worker 用 --async 提交图片/视频，保存回执并继续循环；上传未完成时连续 5 条短消息仍可回传，pending 不 ack，所有部分 accepted 后才自动 ack/结清通知。强制中断的未知发送不盲目重发。另在隔离无副作用 job 验证监督进程消失后的 reviewed reconcile：活跃工具组拒绝，退出后 interrupted 释放名额，旧 ID 不重跑，不自行确认微信事件。检查 worker_lease_stalled 可被正常续租清除，期间 token 和租约不被接管。

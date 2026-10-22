@@ -1,6 +1,6 @@
 # 在 Meta Muse 云端部署
 
-独立程序 Muse Link v0.4.0-rc.4，将 Meta Muse 对接微信 ClawBot。需要 Muse 自己的 Linux、Node.js 24+ / npm、运行中的 systemd、服务安装权限和 Muse hooks。文字与图片/视频回传的实际账号收取仍待验证。Muse 使用自身的任务能力处理消息，本项目不调用或替换其模型。
+独立程序 Muse Link v0.4.0-rc.5，将 Meta Muse 对接微信 ClawBot。需要 Muse 自己的 Linux、Node.js 24+ / npm、运行中的 systemd、服务安装权限和 Muse hooks。文字与图片/视频回传的实际账号收取仍待验证。Muse 使用自身的任务能力处理消息，本项目不调用或替换其模型。
 
 先请用户在微信“我 → 设置 → 插件”确认并启用 ClawBot。部署使用 Muse 自己的云端，不要求额外公网 IP；云实例必须能持续运行桥、访问腾讯 HTTPS 接口并注册平台原生 hooks。
 
@@ -26,14 +26,14 @@ Windows 可从源代码执行 npm ci、node src/cli.mjs init、node src/cli.mjs 
 
 ## 从 Muse Link v0.2.x / v0.3.x 升级
 
-完成已领取的任务或持久化交接进度，暂停现有微信 hook。停止 muse-link 服务后，从 v0.4.0-rc.4 新解压目录运行安装器，保留原配置、登录和 SQLite 状态，不删除数据库：
+完成已领取的任务或持久化交接进度，暂停现有微信 hook。停止 muse-link 服务后，从 v0.4.0-rc.5 新解压目录运行安装器，保留原配置、登录和 SQLite 状态，不删除数据库：
 
 ```bash
 systemctl stop muse-link
 bash deploy/install.sh
 ```
 
-普通用户为 systemctl 加 sudo -n。安装器会先离线备份、将候选版装入 releases，再切换 current，保留上一版供回滚。同步按本页更新 worker 的 lease_token、renew 和 checkpoint；旧配置也默认要求 token。详见 [生产运维](PRODUCTION.md)。安装器保留配置，已有配置缺少 media_roots 时默认 ~/workspace；按 [媒体说明](MEDIA.md) 把生成工具实际输出目录合并到配置，再按下方步骤启动服务。更新旧 hook 中的纯文字限制，重新 dry_run 并启用。muse-link status 必须显示 version=0.4.0-rc.4、capabilities.send 含 image/video，不能只根据新 CLI 的版本判断后台升级成功。已有会话健康时无需重新扫码。可直接使用 [升级指令](给Muse升级的指令.txt)。
+普通用户为 systemctl 加 sudo -n。安装器会先离线备份、将候选版装入 releases，再切换 current，保留上一版供回滚。同步按本页更新 worker 的 lease_token、renew 和 checkpoint；旧配置也默认要求 token。详见 [生产运维](PRODUCTION.md)。安装器保留配置，已有配置缺少 media_roots 时默认 ~/workspace；按 [媒体说明](MEDIA.md) 把生成工具实际输出目录合并到配置，再按下方步骤启动服务。更新旧 hook 中的纯文字限制，重新 dry_run 并启用。muse-link status 必须显示 version=0.4.0-rc.5、capabilities.send 含 image/video，不能只根据新 CLI 的版本判断后台升级成功。已有会话健康时无需重新扫码。可直接使用 [升级指令](给Muse升级的指令.txt)。
 
 ## 扫码
 
@@ -105,6 +105,8 @@ muse-link health
 
    事件和 token 使用领取结果，不能照抄占位符。用带引号的 heredoc 和不会出现在正文中的分隔符，不把用户文字拼进 shell。长任务先用同一 reply 命令加 `--progress --reply-id started` 发简短确认；每条进度有稳定 reply-id，不结束任务。
 7. 生成图片/视频后，用真实工具导出完整本地文件到 media_roots，在同一最终 reply 加 `--image '/absolute/result.png'`、`--video '/absolute/result.mp4'`。最多 4 个媒体，可省略文字；图片 20 MiB、视频 50 MiB，本包不转码。只有 URL/媒体 ID 时先导出文件。不要先最终回复文字结束任务再补图；预览用 --progress --reply-id preview。PrivateTmp 下跨进程文件应放持久化 workspace，详见 MEDIA.md。
+
+   rc.5 的媒体回复使用 `--async`，先私密保存原回复正文、媒体路径和 task.completion.request_id，再提交。返回 submitted=true/state=pending 后保存回执，立即继续领取其他消息；每轮查看原 request，不在消息循环中同步等待该上传。pending 时仍按每 5 分钟续租，接受后桥自动 ack；通知只能在 accepted 后结清。上传期间同一聊天的短文字可先发出，长任务结果要指出对应原请求。强制重启不会自动重发未完成异步请求，失败按下一项恢复。
 8. accepted 只代表微信 API 确认，不代表手机显示/播放。调用中断先 `muse-link request '<request_id>'`；unknown 不自动重发，核对后可用 review 记录处置，但不会变成可重发。429/503/507 先检查状态，修复或等待后使用同 ID/内容重试。failed 可安全续传的情况不重做生成；持续失败要报告并保留交接记录。
 9. 最终 reply 成功自动 ack。告警、空事件、无需回复或核对后结清的事件，用 `muse-link muse ack '<event_id>' --lease-token '<lease_token>'`；未完成工具步骤不能 ack。未完成不提前确认，持久化业务结果/文件路径以备恢复。可准确记录结果就绪时间时才使用 --ready-at，不能把发送调用时刻冒充模型完成时刻。
 10. restore_review_required 时停止，不绕过闸门；按照 PRODUCTION.md 核对恢复后可能重复的微信和工具动作。72 小时验收按“给Muse生产验收的指令.txt”，保留脱敏证据。

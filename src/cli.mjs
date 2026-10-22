@@ -29,7 +29,7 @@ const help = `muse-link ${VERSION} — Meta Muse / WeChat ClawBot bridge (Node.j
   inbox count | inbox pull [--limit 1] [--lease 30m] [--wait 30s] [--offline]
   inbox ack EVENT_ID... --lease-token TOKEN [--offline]
   muse next [--limit 1] [--lease 30m] [--wait 30s] [--output /private/new-task.json]
-  muse reply EVENT_ID --lease-token TOKEN --text - [--progress --reply-id STABLE_ID] [--ready-at ISO_TIME]
+  muse reply EVENT_ID --lease-token TOKEN --text - [--progress --reply-id STABLE_ID] [--ready-at ISO_TIME] [--async]
     [--image /absolute/image.png] [--video /absolute/video.mp4] (repeatable; text optional with media)
   muse ack EVENT_ID... --lease-token TOKEN
   muse renew EVENT_ID --lease-token TOKEN [--lease 30m]
@@ -86,9 +86,11 @@ async function main() {
     'lease-token': { type: 'string' }, step: { type: 'string' }, phase: { type: 'string' },
     reviewed: { type: 'boolean' }, output: { type: 'string' },
     offline: { type: 'boolean' },
+    async: { type: 'boolean' },
   } });
   const command = positionals[0];
   if (values.help || !command) { console.log(help); return; }
+  if (values.async && !(command === 'muse' && positionals[1] === 'reply')) fail('invalid_argument', '--async is only supported for muse reply.');
   if (values.output && command !== 'backup' && !(command === 'muse' && positionals[1] === 'next')) fail('invalid_argument', '--output is only supported for backup and muse next.');
   if (values.offline && !(command === 'inbox' && ['pull', 'ack'].includes(positionals[1]))) fail('invalid_argument', '--offline is only supported for inbox pull/ack.');
   if (values.offline && duration(values.wait, 0) !== 0) fail('invalid_argument', 'Offline claims cannot wait for a running daemon.');
@@ -170,6 +172,7 @@ async function main() {
       const result = await local(config, '/v1/muse/replies', { timeout: 10 * 60000, body: {
         event_id: positionals[2], text, mode: values.progress ? 'progress' : 'final',
         lease_token: values['lease-token'],
+        ...(values.async ? { async: true } : {}),
         ...(media.length ? { media } : {}),
         ...(values['reply-id'] !== undefined ? { reply_id: values['reply-id'] } : {}),
         ...(values['ready-at'] ? { model_ready_at: Date.parse(values['ready-at']) } : {}),

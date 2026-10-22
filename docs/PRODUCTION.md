@@ -1,6 +1,6 @@
 # 生产运行与验收
 
-当前版本 **0.4.0-rc.4** 是生产加固候选版。代码和本地故障测试不能证明 Meta Muse 的实际 hooks、微信账号收发和手机媒体播放已经通过。完成本文的真实验收后，才能为该部署作出上线判断。
+当前版本 **0.4.0-rc.5** 是生产加固候选版。代码和本地故障测试不能证明 Meta Muse 的实际 hooks、微信账号收发和手机媒体播放已经通过。完成本文的真实验收后，才能为该部署作出上线判断。
 
 ## 运行范围
 
@@ -17,7 +17,7 @@ API 只监听 loopback，除存活探针外都需要私密 token。用 init 生�
 1. 阅读变更，完成已领取任务或保存交接记录；暂停 Muse hook，停止服务。不要用新进程与旧桥同时轮询同一微信账号。
 2. 从新版本解压目录运行 `bash deploy/install.sh`。依赖先安装在 releases 的候选目录，失败不会切换 current。已有状态会在切换前备份到 `~/.local/share/muse-link/backups/pre-upgrade-*`。保留配置和登录，不自动启动服务。
 3. 更新 Muse worker，使用当前版本的 lease_token、renew、checkpoint 协议。旧配置省略 require_lease_token 时也默认为 true；旧 worker 不带 token 会返回 409，不能只升级后台。
-4. 合并需要的配置，启动服务，确认 status.version=0.4.0-rc.4、health 通过；dry_run hook 后启用。保留上一版及私密备份。
+4. 合并需要的配置，启动服务，确认 status.version=0.4.0-rc.5、health 通过；dry_run hook 后启用。保留上一版及私密备份。
 
 普通用户为以下 systemctl 命令加 `sudo -n`：
 
@@ -65,6 +65,7 @@ bash "$HOME/.local/share/muse-link/rollback.sh"
 | max_state_bytes | 1073741824 | 状态目录预算 1 GiB，包括 DB/WAL 和 outbox。 |
 | max_outbox_bytes | 536870912 | 媒体快照预算 512 MiB；准备前预留空间，失败也会释放预留。 |
 | backlog_warn_ms / poll_stale_ms | 300000 / 120000 | 可领取任务积压 5 分钟、上次成功轮询超过 2 分钟时 readiness 失败。poll_stale_ms 应大于实际长轮询超时。 |
+| worker_stale_ms | 600000 | 有效租约 10 分钟没有领取/续租/checkpoint 活动时报告 worker_lease_stalled；持久化监测，不清理租约。 |
 | event_retention_days | 7 | 完成事件保留 7 天，未完成步骤或未 ack 的事件保留。 |
 | send_retention_days | 90 | 发送幂等记录保留至少 90 天；未核对 unknown、关联未完成事件及媒体作业保留。不得短于 event 保留期。 |
 | failed_media_retention_days | 7 | 失败/不确定媒体快照保存 7 天，过期清理；failed 先冻结为 unknown，禁止缺少原快照后换内容续发。 |

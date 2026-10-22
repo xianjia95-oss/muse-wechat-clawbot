@@ -40,7 +40,7 @@ export class Bridge {
   }
   status() {
     const session = this.store.get('session');
-    const queue = this.store.queueStats();
+    const queue = this.store.queueStats(operational(this.config).worker_stale_ms);
     const deliveries = [...this.deliveries.values()];
     return {
       binding: this.config.binding,
@@ -102,10 +102,8 @@ export class Bridge {
     else if (prior.state === 'failed') this.store.retrySend(body.request_id);
     const began = performance.now();
     const submittedAt = Date.now();
-    const previous = this.peerTails.get(body.to) ?? Promise.resolve();
     this.deliveries.set(body.request_id, { stage: 'queued', at: submittedAt });
-    const work = previous.catch(() => {}).then(() => this.deliver(body, chunks, began, submittedAt, eventId, leaseToken));
-    this.peerTails.set(body.to, work);
+    const work = Promise.resolve().then(() => this.deliver(body, chunks, began, submittedAt, eventId, leaseToken));
     this.inflight.set(body.request_id, work);
     this.peerCounts.set(body.to, (this.peerCounts.get(body.to) ?? 0) + 1);
     const clean = () => {
@@ -113,14 +111,22 @@ export class Bridge {
       this.deliveries.delete(body.request_id);
       const count = this.peerCounts.get(body.to) - 1;
       if (count) this.peerCounts.set(body.to, count); else this.peerCounts.delete(body.to);
-      if (this.peerTails.get(body.to) === work) this.peerTails.delete(body.to);
     };
     work.then(clean, clean);
     return work;
   }
 
+  queuePeer(peer, action) {
+    const previous = this.peerTails.get(peer) ?? Promise.resolve();
+    const work = previous.catch(() => {}).then(action);
+    this.peerTails.set(peer, work);
+    const clean = () => { if (this.peerTails.get(peer) === work) this.peerTails.delete(peer); };
+    work.then(clean, clean);
+    return work;
+  }
+
   async deliver(body, chunks, began, submittedAt, eventId, leaseToken) {
-    const queueMs = performance.now() - began;
+    let queueMs = 0;
     let firstChunkMs = null;
     let upstreamMs = 0;
     let prepareMs = 0;
@@ -198,26 +204,32 @@ export class Bridge {
           uploadMs += elapsed; upstreamMs += elapsed;
         }
       }
-      const started = performance.now();
-      // Uploads and a recipient's earlier replies can outlive the task lease.
-      // Fence the old worker again immediately before each chat submission.
-      checkLease();
-      this.store.partState(body.request_id, part.part, 'sending');
-      this.deliveries.get(body.request_id).stage = 'sending';
-      try {
-        if (chunk.type === 'text') await this.ilink.sendText(this.store.get('session'), body.to, chunk.text, this.store.context(body.to), part.client_id);
-        else await this.ilink.sendMedia(this.store.get('session'), body.to, record.media_item, this.store.context(body.to), part.client_id);
-      } catch (error) {
+      // Only actual chat submissions occupy a recipient's ordered lane.
+      // Slow preparation/uploads leave that lane available to short replies.
+      this.deliveries.get(body.request_id).stage = 'queued';
+      const queued = performance.now();
+      await this.queuePeer(body.to, async () => {
+        queueMs += performance.now() - queued;
+        checkLease();
+        if (this.store.get('expired', false)) failDelivery(new BridgeError('session_expired', '微信登录已过期，请重新扫码。', 401), 'lease');
+        this.store.partState(body.request_id, part.part, 'sending');
+        this.deliveries.get(body.request_id).stage = 'sending';
+        const started = performance.now();
+        try {
+          if (chunk.type === 'text') await this.ilink.sendText(this.store.get('session'), body.to, chunk.text, this.store.context(body.to), part.client_id);
+          else await this.ilink.sendMedia(this.store.get('session'), body.to, record.media_item, this.store.context(body.to), part.client_id);
+        } catch (error) {
+          const elapsed = performance.now() - started;
+          upstreamMs += elapsed; sendMs += elapsed;
+          failDelivery(error, 'send', part);
+        }
         const elapsed = performance.now() - started;
         upstreamMs += elapsed; sendMs += elapsed;
-        failDelivery(error, 'send', part);
-      }
-      const elapsed = performance.now() - started;
-      upstreamMs += elapsed; sendMs += elapsed;
-      accepted++;
-      this.store.partState(body.request_id, part.part, 'accepted', ms(elapsed));
-      firstChunkMs ??= performance.now() - began;
-      this.log('chunk_accepted', { request_id: body.request_id, chunk: part.part + 1, upstream_ms: ms(elapsed) });
+        accepted++;
+        this.store.partState(body.request_id, part.part, 'accepted', ms(elapsed));
+        firstChunkMs ??= performance.now() - began;
+        this.log('chunk_accepted', { request_id: body.request_id, chunk: part.part + 1, upstream_ms: ms(elapsed) });
+      });
       if (record) {
         try {
           await removeSnapshot(this.config, body.request_id, record);
@@ -271,7 +283,7 @@ export class Bridge {
         added += this.store.addEvent(event);
       }
       // Events, tokens and cursor commit together; a failed batch is replayable.
-      if (response.get_updates_buf !== undefined) this.store.set('cursor', response.get_updates_buf);
+      if (typeof response.get_updates_buf === 'string' && response.get_updates_buf.length) this.store.set('cursor', response.get_updates_buf);
     });
     if (added) {
       this.worker.last_ingest_at = new Date().toISOString();

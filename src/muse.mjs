@@ -58,6 +58,7 @@ export class MuseAdapter {
     this.bridge.worker.reply_requests++;
     this.bridge.worker.last_reply_at = new Date().toISOString();
     if (!body || typeof body !== 'object' || Array.isArray(body)) fail('invalid_body', 'JSON object required.');
+    if (body.async !== undefined && typeof body.async !== 'boolean') fail('invalid_async', 'async must be boolean.');
     if (typeof body.event_id !== 'string' || !body.event_id || body.event_id.length > 512) fail('invalid_event_id', 'event_id is required.');
     const mode = body.mode ?? 'final';
     if (!['final', 'progress'].includes(mode)) fail('invalid_mode', 'mode must be final or progress.');
@@ -77,16 +78,26 @@ export class MuseAdapter {
     if (this.bridge.config.require_lease_token !== false && prior?.state !== 'accepted') this.bridge.store.requireLease(body.event_id, body.lease_token);
     if (!prior && row.lease_until <= Date.now()) fail('event_not_leased', 'Claim the event with muse next before replying.', 409);
     if (mode === 'final' && this.bridge.store.steps(body.event_id).some((step) => step.state === 'started')) fail('task_step_uncertain', 'Resolve unfinished tool steps before final reply.', 409);
-    const result = await this.bridge.send({
+    const sending = this.bridge.send({
       to: event.from_wxid, text: body.text, request_id: requestId,
       ...(body.media !== undefined ? { media: body.media } : {}),
       ...(body.model_ready_at !== undefined ? { model_ready_at: body.model_ready_at } : {}),
     }, { eventId: body.event_id, leaseToken: body.lease_token });
-    // A timeout, rejected reply or uncertain outcome never reaches this ack.
-    if (mode === 'final') {
-      this.bridge.store.ack([body.event_id]);
-      this.bridge.log('task_acknowledged', { request_id: requestId, source: 'final_reply' });
+    const complete = sending.then((result) => {
+      // The deferred HTTP response never acknowledges an unfinished send.
+      if (mode === 'final') {
+        this.bridge.store.ack([body.event_id]);
+        this.bridge.log('task_acknowledged', { request_id: requestId, source: 'final_reply' });
+      }
+      return { ...result, event_id: body.event_id, mode, event_completed: mode === 'final' || row.acked_ms !== null };
+    });
+    if (body.async === true && prior?.state !== 'accepted') {
+      complete.catch((error) => {
+        this.bridge.log('async_reply_failed', { request_id: requestId, code: error.code ?? 'internal_error' });
+        try { this.bridge.alert('async_reply_failed', '后台微信回复未完成，请核对原请求和 worker 交接记录；不确定结果不可自动重发。'); } catch { /* Original intent remains queryable. */ }
+      });
+      return { ok: true, submitted: true, state: 'pending', request_id: requestId, event_id: body.event_id, mode, event_completed: false };
     }
-    return { ...result, event_id: body.event_id, mode, event_completed: mode === 'final' || row.acked_ms !== null };
+    return complete;
   }
 }
