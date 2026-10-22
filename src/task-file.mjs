@@ -21,7 +21,14 @@ export function reserveTaskFile(path, endpoint, configPath) {
     ftruncateSync(fd, bytes.length);
     fsyncSync(fd);
   };
-  try { save({ claim_state: 'awaiting_response' }); }
+  try {
+    save({ claim_state: 'awaiting_response' });
+    // Reserve a durable directory entry before making the claim request.
+    if (process.platform !== 'win32') {
+      const directory = openSync(dirname(path), 'r');
+      try { fsyncSync(directory); } finally { closeSync(directory); }
+    }
+  }
   catch (error) { closeSync(fd); throw error; }
   return {
     save: (result) => save({ claim_state: 'response_saved', saved_at: new Date().toISOString(), ...result }),

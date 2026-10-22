@@ -44,8 +44,23 @@ job_root="$HOME/.local/state/muse-link-worker/jobs"
 mkdir -p "$job_root/complete"
 chmod 700 "$job_root" "$job_root/complete"
 printf '%s\n' '{"id":"complete","state":"succeeded","settled_at":null}' > "$job_root/complete/job.json"
-[ "$(sh "$hook")" = 'wake: Muse 有 1 个后台工具结果待核对回传' ]
+[ "$(sh "$hook")" = 'wake: Muse 有 1 个后台任务或结果待处理' ]
 node "$target/current/scripts/tool-job.mjs" settle --dir "$job_root" --id complete --reviewed
+[ "$(sh "$hook")" = silent ]
+# Runnable durable queue entries also wake without dispatching from the detector.
+mkdir -m 700 "$job_root/queued"
+node --input-type=module - "$job_root/queued/job.json" <<'JS'
+import { writeFileSync } from 'node:fs';
+writeFileSync(process.argv[2], JSON.stringify({ id: 'queued', kind: 'io', state: 'queued', queue_sequence: 1,
+  created_at: new Date().toISOString(), start_before: new Date(Date.now() + 60000).toISOString() }), { mode: 0o600 });
+JS
+[ "$(sh "$hook")" = 'wake: Muse 有 1 个后台任务或结果待处理' ]
+node --input-type=module - "$job_root/queued/job.json" <<'JS'
+import { readFileSync } from 'node:fs';
+if (JSON.parse(readFileSync(process.argv[2])).state !== 'queued') process.exit(1);
+JS
+node "$target/current/scripts/tool-job.mjs" cancel --dir "$job_root" --id queued
+node "$target/current/scripts/tool-job.mjs" settle --dir "$job_root" --id queued --reviewed
 [ "$(sh "$hook")" = silent ]
 grep -q '^ExecStart=/usr/local/bin/node .*/current/src/cli.mjs run$' "$unit"
 first="$(readlink -f "$target/current")"

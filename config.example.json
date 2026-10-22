@@ -23,6 +23,7 @@
     "max_outbox_bytes": 536870912,
     "max_http_requests": 128,
     "backlog_warn_ms": 300000,
+    "worker_claim_warn_ms": 60000,
     "poll_stale_ms": 120000,
     "worker_stale_ms": 600000,
     "event_retention_days": 7,

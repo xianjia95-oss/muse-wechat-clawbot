@@ -1,11 +1,12 @@
 import { createHash, createCipheriv, randomBytes, randomUUID } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, open, realpath, rename, rm, stat } from 'node:fs/promises';
+import { open, realpath, rename, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { BridgeError, fail } from './errors.mjs';
+import { mkdirDurable, syncDirectory, syncFile } from './durability.mjs';
 
 export const MEDIA_LIMITS = { image: 20 * 1024 * 1024, video: 50 * 1024 * 1024 };
 export const within = (root, path) => {
@@ -60,7 +61,7 @@ export async function prepareMedia(config, requestId, part, descriptor, reserve 
     if (!before.isFile()) fail('invalid_media_file', 'Media path must be a regular file.');
     if (before.size <= 0 || before.size > MEDIA_LIMITS[descriptor.type]) fail('media_too_large', 'Media is empty or exceeds the local limit (image 20 MiB; video 50 MiB).', 413);
     release = reserve((Math.floor(before.size / 16) + 1) * 16);
-    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await mkdirDurable(directory);
     const key = randomBytes(16);
     const md5 = createHash('md5');
     const sha256 = createHash('sha256');
@@ -78,7 +79,11 @@ export async function prepareMedia(config, requestId, part, descriptor, reserve 
     const after = await file.stat();
     if (size !== before.size || before.size !== after.size || before.mtimeMs !== after.mtimeMs) fail('media_changed', 'Media changed while preparing; submit only completed files.');
     checkFormat(descriptor.type, head);
+    // SQLite may commit this reference immediately after return. Persist the
+    // bytes and the published filename first, including newly created parents.
+    await syncFile(temp);
     await rename(temp, path);
+    await syncDirectory(directory);
     return { type: descriptor.type, cipher_path: path, raw_size: size, cipher_size: (Math.floor(size / 16) + 1) * 16,
       raw_md5: md5.digest('hex'), sha256: sha256.digest('hex'), key_hex: key.toString('hex'), filekey: randomBytes(16).toString('hex') };
   } finally {

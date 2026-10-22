@@ -89,7 +89,7 @@ CDN 上传在 media_timeout_ms（默认 120000）总时限内最多尝试三次�
 
 - `GET /v1/events?limit=20&lease=30m&wait=30s`：领取。limit 1..100、lease 1 秒..1 小时、wait 0..60 秒；等待请求有事件时立即返回。
 - `POST /v1/events/ack`：正文 `{"event_ids":["muse:123"],"lease_token":"当前领取 token"}`；多事件不同 token 用 lease_tokens 对象按 event_id 映射，处理完确认。
-- `GET /v1/status`：version、capabilities、登录、接收状态、收件箱数量、发送中请求数；升级后应显示 version=0.4.0-rc.5、capabilities.send 含 image/video。
+- `GET /v1/status`：version、capabilities、登录、接收状态、收件箱数量、发送中请求数；配套候选后台升级后应显示 version=0.4.0-rc.6、capabilities.send 含 image/video。
 - `GET /v1/metrics`：最近 300 请求的状态计数，以及成功请求耗时 p50/p95。失败和 pending 不混入成功耗时。
 - `GET /healthz`：进程存活；微信连通性看 status 或 muse-link health。
 
@@ -111,5 +111,7 @@ rc.3 的 stale_lease 带 lease_reason（missing_token / token_mismatch / lease_e
 - `GET /v1/health`：认证的 readiness，200 healthy=true 或 503 healthy=false；problems、queue、storage 及 status。检查轮询新鲜度、存储、积压、未知发送、遗留工具步骤和恢复闸门。
 
 领取、续租、checkpoint 会持久化刷新事件的 lease_activity_ms。queue 增加 stalled_leases、oldest_lease_activity_ms；活跃租约超过 operations.worker_stale_ms（默认 10 分钟）没有上述活动时，health 返回 worker_lease_stalled。它是待检查提示，不证明 worker 已死亡，不修改或抢占租约；旧记录无活动字段时保守使用接收时刻，正常续租后刷新。
+
+rc.6 候选增加 consumer（health/diagnostics）：有 ready 消息且 operations.worker_claim_warn_ms（默认60000）内没有成功领取进展时，health 返回503、worker_claim_gap。consumer 含 ready_wait_ms、without_claim_progress_ms、last_successful_claim_at、warn_after_ms；空领取请求不算成功进展。近期成功领取重算观察期，全部已领取或无待处理不触发本项；旧桥缺遥测时报告不可核实。worker_liveness_verified / platform_dispatch_verified 始终false，不能由桥推断平台投递成功或进程死亡，不触发重派/抢租约。参见 [自动唤醒排查](AUTOMATIC_DISPATCH.md)。
 
 容量满返回 429 queue_full / 503 http_capacity 或 inbox_full，存储预算返回 507 storage_pressure，维护/停机排空返回 503；429/503/507 带 Retry-After:5。检查 request 后再决定是否用相同内容重试。具体预算、90 天幂等保留窗口、恢复后的强制核对、备份与上线条件见 [生产运行](PRODUCTION.md)。

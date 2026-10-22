@@ -1,6 +1,6 @@
 # 生产运行与验收
 
-当前版本 **0.4.0-rc.5** 是生产加固候选版。代码和本地故障测试不能证明 Meta Muse 的实际 hooks、微信账号收发和手机媒体播放已经通过。完成本文的真实验收后，才能为该部署作出上线判断。
+当前版本 **0.4.0-rc.6** 是生产加固候选版。代码和本地故障测试不能证明 Meta Muse 的实际 hooks、微信账号收发和手机媒体播放已经通过。完成本文的真实验收后，才能为该部署作出上线判断。
 
 ## 运行范围
 
@@ -17,7 +17,7 @@ API 只监听 loopback，除存活探针外都需要私密 token。用 init 生�
 1. 阅读变更，完成已领取任务或保存交接记录；暂停 Muse hook，停止服务。不要用新进程与旧桥同时轮询同一微信账号。
 2. 从新版本解压目录运行 `bash deploy/install.sh`。依赖先安装在 releases 的候选目录，失败不会切换 current。已有状态会在切换前备份到 `~/.local/share/muse-link/backups/pre-upgrade-*`。保留配置和登录，不自动启动服务。
 3. 更新 Muse worker，使用当前版本的 lease_token、renew、checkpoint 协议。旧配置省略 require_lease_token 时也默认为 true；旧 worker 不带 token 会返回 409，不能只升级后台。
-4. 合并需要的配置，启动服务，确认 status.version=0.4.0-rc.5、health 通过；dry_run hook 后启用。保留上一版及私密备份。
+4. 合并需要的配置，启动服务，确认 status.version=0.4.0-rc.6、health 通过；dry_run hook 后启用。保留上一版及私密备份。
 
 普通用户为以下 systemctl 命令加 `sudo -n`：
 
@@ -50,7 +50,9 @@ bash "$HOME/.local/share/muse-link/rollback.sh"
 
 最终回复必须带当前 lease_token。accepted 后自动 ack；接收重复批次、重复回复、发送成功但未 ack 的重启不会自动再发。进度回复用稳定 reply_id。不要通过底层 send 绕过 Muse 的租约、路由与步骤检查。请将工具结果和生成文件路径也保存到 Muse 侧交接记录，单个 checkpoint 结果最多 16 KiB。
 
-连续消息不能被同步外部工具长期挡住；rc.4 增加的 Linux 后台监督器与完成唤醒，须按 [BURST_MESSAGES.md](BURST_MESSAGES.md) 更新真实 worker/hook 才生效。它不调用 Muse 模型或自动完成桥事件，后台目录须独立私密备份，活跃工具不应在升级/回滚时被盲目重跑。仅替换 daemon 无法改变平台 worker 的阻塞执行方式。
+连续消息不能被同步外部工具长期挡住。Muse 已反馈可派发原生并行任务，优先按 [NATIVE_PARALLEL.md](NATIVE_PARALLEL.md) 接入：值守调度者轻量领取并派发，独立子任务各自续租/直接回微信，保存真实 task handle 与每事件唯一执行权交接。不同事件可同时处理；调度者接班不重派仍运行的子任务。真实原生创建/接管/并行回复需在部署中验收，本地 HTTP 客户端并发不是原生模型验收。
+
+rc.6 的持久化工具队列与 io/cpu/总名额仅约束可信脚本；[BURST_MESSAGES.md](BURST_MESSAGES.md) 提供工具资源控制和单模型保底流程，4/4/1 是工具起步档，默认兼容旧的 2，不是原生任务上限。未完成的排队/运行/发送事件均需正常续租，续租成功才刷新排队启动期限。后台目录连同 .scheduler.json 须独立私密备份。活跃工具不应在升级/回滚时被盲目重跑；回滚到旧 helper 前先停止新增调度、排空或明确取消 queued、核对活动工具及其外部结果，旧版无法识别队列。仅替换 daemon 无法改变平台 worker 的阻塞执行方式。
 
 ## 容量与配置
 
@@ -133,7 +135,7 @@ muse-link health
 
 代码测试、Linux 安装模拟和本地 stress 是必要检查，不能替代以下项目。请用 [给 Muse 的生产验收指令](给Muse生产验收的指令.txt)，保留不含凭据的记录：
 
-1. 真实 hook dry_run、启用状态、实际检测间隔、worker 工具权限；微信文字和真实工具调用双向通畅。
+1. 真实 hook dry_run、启用状态、实际检测间隔、worker 工具权限；按 [自动唤醒与交接](AUTOMATIC_DISPATCH.md) 保存 invocation 到投递/真实任务运行的证据。用户不操作 Muse 主聊天时，冷启动、正常轮换都能自动领取/回复，手动派发不计为自动通过；微信文字和真实工具调用双向通畅。
 2. 图片能在手机打开、视频能播放，记录真实路径、request_id、accepted_at、分阶段耗时和手机观察时间。
 3. 同 ID 重复提交不重复收取；实际停机/重启、断网恢复、worker 中途失败、旧租约、未决工具步骤、unknown 都按上述规则处理。模拟 fault 不应触发未授权外部动作。
 4. 备份校验、隔离状态恢复、恢复暂停与人工核对、候选版升级和代码回滚演练；记录实际恢复时间。

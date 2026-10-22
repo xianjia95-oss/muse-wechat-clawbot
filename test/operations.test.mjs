@@ -43,6 +43,7 @@ test('old config adopts operational defaults; typos and invalid retention are re
   const raw = JSON.parse(readFileSync(path)); delete raw.operations; delete raw.require_lease_token; privateJson(path, raw);
   const config = loadConfig(path);
   assert.equal(config.require_lease_token, true); assert.equal(config.operations.max_inflight_sends, 64);
+  assert.equal(config.operations.worker_claim_warn_ms, 60000);
   privateJson(path, { ...raw, operations: { max_peer_send: 1 } }); assert.throws(() => loadConfig(path), /Unknown operations/);
   privateJson(path, { ...raw, operations: { send_retention_days: 1 } }); assert.throws(() => loadConfig(path), /retention/);
 });

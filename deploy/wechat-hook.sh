@@ -18,7 +18,7 @@ if [ -z "$reason" ] && [ -d "$JOBS" ]; then
     if [ -f "$JOB_HELPER" ] && jobs="$(node "$JOB_HELPER" pending --dir "$JOBS")"; then
         case "$jobs" in ''|*[!0-9]*) reason='invalid background job count' ;;
             *) if [ "$jobs" -gt 0 ]; then
-                   printf 'wake: Muse 有 %s 个后台工具结果待核对回传\n' "$jobs"
+                   printf 'wake: Muse 有 %s 个后台任务或结果待处理\n' "$jobs"
                    exit 0
                fi ;;
         esac

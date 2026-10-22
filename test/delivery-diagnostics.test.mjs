@@ -11,6 +11,8 @@ import { createApi } from '../src/server.mjs';
 import { MuseAdapter } from '../src/muse.mjs';
 import { lockState } from '../src/state-lock.mjs';
 import { deliveryDiagnostics } from '../src/diagnostics.mjs';
+import { consumerProgress } from '../src/worker-progress.mjs';
+import { health } from '../src/operations.mjs';
 
 const exec = promisify(execFile);
 const cliPath = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
@@ -90,6 +92,45 @@ test('diagnostic script works with rc.2-shaped status and performs only three re
   const report = JSON.parse(stdout);
   assert.equal(report.queue.ready, 0); assert.equal(report.queue.leased, 3); assert.equal(report.worker_telemetry_available, false);
   assert.deepEqual(paths.sort(), ['/v1/health', '/v1/metrics', '/v1/status']); assert.equal(stdout.includes('DO-NOT-LEAK'), false);
+  assert.equal(report.consumer.state, 'no_ready_work');
+  assert.equal(report.consumer.worker_liveness_verified, false);
+});
+
+test('unclaimed messages warn before five-minute backlog without claiming, acking or assuming a platform fault', async (t) => {
+  const { bridge, store, origin, headers, path, calls } = await api(t);
+  bridge.poll = { state: 'waiting', last_ok_at: new Date().toISOString(), error: null };
+  for (let i = 0; i < 10; i++) add(bridge, 'no-consumer-' + i);
+  store.db.prepare('UPDATE events SET received_ms=?').run(Date.now() - 90000);
+  const before = store.event('muse:no-consumer-0');
+  // Merely polling unsuccessfully is not successful consumption.
+  bridge.worker.claim_requests = 20; bridge.worker.last_claim_at = new Date().toISOString();
+  const response = await fetch(origin + '/v1/health', { headers });
+  assert.equal(response.status, 503);
+  const readiness = await response.json();
+  assert.ok(readiness.problems.includes('worker_claim_gap'));
+  assert.equal(readiness.problems.includes('worker_backlog'), false);
+  const report = await cli(path, ['diagnose']);
+  assert.equal(report.consumer.state, 'claim_gap');
+  assert.equal(report.consumer.worker_liveness_verified, false);
+  assert.equal(report.consumer.platform_dispatch_verified, false);
+  assert.ok(report.findings.some((item) => item.code === 'worker_claim_gap'));
+  assert.equal(store.count(), 10); assert.deepEqual(store.event('muse:no-consumer-0'), before);
+  assert.equal(calls.length, 0); assert.equal(JSON.stringify(report).includes('PRIVATE-TEXT'), false);
+  await new MuseAdapter(bridge).next();
+  assert.equal(health(bridge).consumer.state, 'within_grace');
+  assert.equal(health(bridge).healthy, true);
+});
+
+test('consumer evidence respects custom grace, recent successful claims, leased work and missing telemetry', () => {
+  const now = Date.now(), queue = { ready: 10, oldest_ready_ms: now - 90000 };
+  const stalled = { last_task_at: new Date(now - 100000).toISOString(), last_claim_at: new Date(now).toISOString() };
+  assert.equal(consumerProgress(queue, stalled, 60000, now).state, 'claim_gap');
+  assert.equal(consumerProgress(queue, stalled, 120000, now).state, 'within_grace');
+  assert.equal(consumerProgress(queue, { ...stalled, last_task_at: new Date(now - 5000).toISOString() }, 60000, now).state, 'within_grace');
+  assert.equal(consumerProgress({ ready: 0, leased: 10, pending: 10 }, stalled, 60000, now).state, 'no_ready_work');
+  const report = deliveryDiagnostics({ status: { queue } }, now);
+  assert.equal(report.consumer.state, 'telemetry_unavailable');
+  assert.equal(report.findings.some((item) => item.code === 'worker_claim_gap'), false);
 });
 
 test('delivery status separates recipient queueing from a pending network send', async (t) => {

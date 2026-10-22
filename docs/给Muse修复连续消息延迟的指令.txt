@@ -1,14 +1,16 @@
 请修复微信连续发消息时，前一个生图/API 测试卡住导致后续消息等待的问题。先读 docs/BURST_MESSAGES.md、docs/MUSE.md；不删除数据库、不清租约、不改稳定 request_id、不关闭 token 校验。
 
+Muse 当前已反馈可派发原生并行任务，优先使用 docs/给Muse启用原生并行任务的指令.txt：值守者领取后立即派给真实原生子任务，各子任务直接回微信。以下单模型后台工具方案作为保底和工具资源控制，不能再把4个工具名额误当Muse任务上限。
+
 目前已知外部 HTTP 曾等待 110 秒并换域名再等 55 秒，足以阻塞同步 worker，但不能把某条消息全部 10 分钟延迟都算到这个请求上。--limit 1 只是每次领取一条，不是平台禁止并行的证据。保留一个 Muse 模型 worker 即可，长工具用 Linux 后台监督器，模型消息循环继续接待短消息。
 
 先用新源码里的 node scripts/queue-report.mjs --config "$HOME/.config/muse-link/config.json" --since 24h --limit 100 做只读逐条核查。它能对现有 rc.3 运行，无需 npm 安装或重启。回传脱敏 event/request 标识、received_to_submit_ms、submit_to_accept_ms、stage 和桥 timing，不回传 token、账号、正文、工具输出。没有 accepted 最终回复的 ack 要逐条核对，不以 pending=0 或历史 69 条 accepted 断言所有消息都正常回复。
 
-把 BURST_MESSAGES.md 的消息循环写入真实原生 hook 指令并执行：完成一条立刻再次 next，检查后台 job 终态再处理新消息，直到真正没有待处理项；长请求先 progress + 持久化原领取文件/稳定步骤/job/结果路径，必要时 checkpoint started。用 node scripts/tool-job.mjs start --id '<稳定编号>' --script '/private/trusted-tool.mjs' --timeout 120s 启动可信脚本，返回后不要同步等待它。工具完成后核对业务结果，正确 completed，再用原事件有效 token 最终 reply；accepted 后 settle --reviewed。失败/超时保持待核对，不重跑外部操作，继续处理后续短消息。
+把 BURST_MESSAGES.md 的消息循环写入真实原生 hook 指令并执行：完成或提交后台一条立刻再次 next，先续租所有未完成事件、更新 queued 启动期限、dispatch、检查后台 job 终态和异步回执，再处理新消息。有后台任务时 next --wait 1s。长请求先 progress + 持久化原领取文件/稳定步骤/job/结果路径，必要时 checkpoint started。按 docs/给Muse启用并发队列的指令.txt 配置 4/4/1/64，用 enqueue --kind io|cpu --start-before '<当前lease_until减60秒UTC ISO时间>' --id '<稳定编号>' --script '/private/trusted-tool.mjs' --timeout 120s 提交可信脚本，返回后不要同步等。完成后核对业务结果，正确 completed，再用原事件有效 token 最终 reply；accepted 后 settle --reviewed。失败/超时保持待核对，不重跑外部操作，继续处理后续短消息。
 
 核实并修改当前额外的 90 秒 hook 去重：不能屏蔽新的 inbox 事件或新的工具结果。新版 deploy/wechat-hook.sh 能在 inbox=0 时发现工具完成结果；独立源码使用 MUSE_LINK_JOB_HELPER 指向实际新源码脚本，详见 BURST_MESSAGES.md。保持唯一消息 worker，不能重复用同一交接文件并发处理；实际 hook 先 dry_run 再 enable，记录真实间隔/去重生效值，不声称平台不支持未经验证的能力。仅替换桥版本无法自动改变你同步等待 shell 的做法。
 
-有活跃 job 时定期检查状态并按原协议续租；换班核实原 worker/工具和私密交接记录。后台脚本不接收聊天正文作为可执行命令，不把 API key 放参数或日志。监督器仅支持 Linux、最多两个未完成 job，不调用 Muse、不自动回复/ack/重试；超过容量的新长任务保存待执行项并进度告知，有空位再开始，不能忽略。
+所有排队、运行、异步发送事件定期检查并按原协议续租；换班核实原 worker/工具和私密交接记录。后台脚本不接收聊天正文作为可执行命令，不把 API key 放参数或日志。监督器仅支持 Linux，兼容默认活动上限 2，显式 configure 启用总 4/io 4/cpu 1 和排队 64；完成自动补位，不调用 Muse、不自动回复/ack/重试。全部记录最多 256，容量满时保留原待执行项和同一 ID，进度告知，有空位再提交，不能忽略。
 
 验收先用无副作用的 110 秒等待脚本：后台运行期间微信连续发 5 条不同编号短消息，逐条确认回复不等待长任务结束；完成后原任务再回传。保留实际 received/submit/accepted 和手机时间，不用本地 mock 耗时代替。再测单个工具超时、重复 start 去重、换班和空 inbox 下工具完成唤醒。原始生图 API、egress/TLS 故障诊断放后台，凭 HTTP 超时不能认定代理依据 Authorization 头阻塞 TLS，也不要回传含凭据的 verbose 日志。
 

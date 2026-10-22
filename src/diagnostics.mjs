@@ -1,3 +1,5 @@
+import { consumerProgress } from './worker-progress.mjs';
+
 const pick = (value, keys) => Object.fromEntries(keys.filter((key) => value?.[key] !== undefined).map((key) => [key, value[key]]));
 
 // Select only operational metadata: never forward task bodies, lease tokens,
@@ -9,7 +11,9 @@ export function deliveryDiagnostics({ status = {}, readiness = {}, metrics = {} 
   if (status.worker?.last_api_error) worker.last_api_error = pick(status.worker.last_api_error, ['at', 'action', 'code', 'status', 'lease_reason', 'lease_until', 'acked_ms', 'server_time']);
   const findings = [];
   const add = (code, next) => { if (!findings.some((finding) => finding.code === code)) findings.push({ code, next }); };
-  if (queue.ready > 0) add('ready_tasks_waiting_for_worker', '消息已入库但尚未领取：检查 Muse hook 是否启用、实际检测间隔及 worker 的领取命令/退出码。');
+  const consumer = consumerProgress(queue, status.worker ? worker : undefined, readiness.consumer?.warn_after_ms ?? 60000, now);
+  if (queue.ready > 0) add('ready_tasks_waiting_for_worker', '消息已入库但尚未领取：检查真实 hook 注册、wake/silent 到平台触发协议的适配、触发投递状态、实际原生任务 handle 与领取命令/退出码；脚本输出 wake 不证明 worker 已启动。');
+  if (consumer.state === 'claim_gap') add('worker_claim_gap', '待领取消息已超过阈值且没有成功领取进展；核对平台投递/调度者、配置端口及是否被长任务阻塞。此项不能判定 worker 不存在或平台故障；不要清租约、重启健康桥或重复派发已接管事件。');
   if (queue.leased > 0) add('tasks_already_leased', '存在已领取任务，不代表已回复；检查原 worker 是否仍执行、保存的 token 和租约截止时间，不要盲目清租约重做工具。');
   if (queue.stalled_leases > 0) add('worker_lease_stalled', '已领取任务长期没有续租或 checkpoint 活动；核对原 worker 与工具后交接，不自动清租约或重做工具。');
   if (queue.started_steps > 0) add('tool_steps_pending', '存在 started 工具步骤；保存实际工具结果并正确写 completed，遗留结果需先核对。');
@@ -22,7 +26,7 @@ export function deliveryDiagnostics({ status = {}, readiness = {}, metrics = {} 
     version: status.version ?? readiness.version, logged_in: status.logged_in ?? readiness.logged_in,
     poll: pick(status.poll ?? readiness.poll, ['state', 'last_ok_at', 'error']),
     queue: { ...queue, next_lease_expiry_in_ms: queue.next_lease_expiry_ms == null ? null : Math.max(0, queue.next_lease_expiry_ms - now) },
-    worker, worker_telemetry_available: !!status.worker,
+    worker, worker_telemetry_available: !!status.worker, consumer,
     inflight_sends: status.inflight_sends,
     delivery: pick(status.delivery, ['queued', 'preparing', 'uploading', 'sending', 'oldest_inflight_ms']),
     metrics: pick(metrics, ['window_requests', 'states', 'accepted_latency_ms', 'first_chunk_ms']),

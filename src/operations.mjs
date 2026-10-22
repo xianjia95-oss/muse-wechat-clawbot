@@ -1,6 +1,7 @@
 import { lstatSync, readdirSync, statfsSync } from 'node:fs';
 import { join } from 'node:path';
 import { operational } from './config.mjs';
+import { consumerProgress } from './worker-progress.mjs';
 import { fail } from './errors.mjs';
 
 export function treeBytes(directory) {
@@ -48,6 +49,7 @@ export function health(bridge) {
   const limits = operational(bridge.config);
   const status = bridge.status();
   const queue = status.queue;
+  const consumer = consumerProgress(queue, status.worker, limits.worker_claim_warn_ms);
   const problems = [];
   if (bridge.stopping) problems.push('shutting_down');
   if (bridge.store.get('restore_review_required', false)) problems.push('restore_review_required');
@@ -55,6 +57,7 @@ export function health(bridge) {
   const last = Date.parse(status.poll.last_ok_at ?? '');
   if (!Number.isFinite(last) || Date.now() - last > limits.poll_stale_ms || !['waiting', 'ok'].includes(status.poll.state) || status.poll.error) problems.push('wechat_poll_unhealthy');
   if (queue.oldest_ready_ms !== null && Date.now() - queue.oldest_ready_ms > limits.backlog_warn_ms) problems.push('worker_backlog');
+  if (consumer.state === 'claim_gap') problems.push('worker_claim_gap');
   if (queue.stalled_leases) problems.push('worker_lease_stalled');
   if (queue.pending >= limits.max_pending_events) problems.push('inbox_capacity');
   if (queue.unknown_sends) problems.push('send_outcome_unknown');
@@ -62,5 +65,5 @@ export function health(bridge) {
   if (bridge.config.require_lease_token === false) problems.push('legacy_worker_protocol');
   let storage;
   try { storage = bridge.resources.check(0, true); } catch (error) { problems.push(error.code ?? 'storage_check_failed'); }
-  return { healthy: problems.length === 0, problems, queue, storage, ...status };
+  return { healthy: problems.length === 0, problems, queue, storage, consumer, ...status };
 }

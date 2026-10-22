@@ -9,6 +9,7 @@ import { VERSION } from './config.mjs';
 import { lockState } from './state-lock.mjs';
 import { within } from './media.mjs';
 import { fail } from './errors.mjs';
+import { mkdirDurable, syncDirectory, syncTree } from './durability.mjs';
 
 async function exists(path) { try { await access(path); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } }
 // Resolve existing ancestors too: a new leaf beneath a junction/symlink still
@@ -56,7 +57,7 @@ export async function backupState(config, output) {
     if (await exists(destination)) fail('backup_exists', 'Backup destination already exists.');
     database = new DatabaseSync(join(config.state_dir, 'bridge.sqlite'), { readOnly: true });
     const stateFiles = await files(config.state_dir);
-    await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
+    await mkdirDurable(dirname(destination));
     const staging = await mkdtemp(join(dirname(destination), '.muse-link-backup-'));
     await mkdir(join(staging, 'state'), { mode: 0o700 });
     await backup(database, join(staging, 'state', 'bridge.sqlite'));
@@ -71,7 +72,9 @@ export async function backupState(config, output) {
     const manifest = { format: 1, version: VERSION, created_at: new Date().toISOString(), original_state_dir: resolve(config.state_dir), files: {} };
     for (const file of await files(staging)) manifest.files[file] = await digest(join(staging, file));
     await writeFile(join(staging, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+    await syncTree(staging);
     await rename(staging, destination);
+    await syncDirectory(dirname(destination));
     return { ok: true, directory: destination, files: Object.keys(manifest.files).length, contains_credentials: true };
   } finally { database?.close(); unlock(); }
 }
@@ -118,11 +121,13 @@ export async function restoreState(config, source) {
       store.set('restore_info', { at: new Date().toISOString(), backup_at: manifest.created_at });
       store.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
     } finally { store.close(); }
+    await syncTree(staging);
     const previous = `${target}.pre-restore-${randomUUID()}`;
     const hadState = await exists(target);
     if (hadState) await rename(target, previous);
     try { await rename(staging, target); }
-    catch (error) { if (hadState) await rename(previous, target); throw error; }
+    catch (error) { if (hadState) { await rename(previous, target); await syncDirectory(dirname(target)); } throw error; }
+    await syncDirectory(dirname(target));
     return { ok: true, review_required: true, previous_state: hadState ? previous : null, config_restored: false };
   } finally { unlock(); }
 }

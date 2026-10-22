@@ -25,7 +25,11 @@ npm start
 - [部署与升级](docs/MUSE.md)
 - [API](docs/API.md) · [图片与视频](docs/MEDIA.md)
 - [故障排查](docs/TROUBLESHOOTING.md)
-- [生产部署与验收](docs/PRODUCTION.md)
+- [自动唤醒与值守交接](docs/AUTOMATIC_DISPATCH.md) · [给 Muse 的修复指令](docs/给Muse修复自动唤醒的指令.txt)
+- [Muse 原生任务并行](docs/NATIVE_PARALLEL.md) · [给 Muse 的接入指令](docs/给Muse启用原生并行任务的指令.txt)
+- [连续消息与并发队列](docs/BURST_MESSAGES.md) · [给 Muse 的启用指令](docs/给Muse启用并发队列的指令.txt)
+- [生产部署与验收](docs/PRODUCTION.md) · [微信验收清单](docs/ACCEPTANCE_CHECKLIST.md)
+- [rc.6 审计与冒烟报告](docs/AUDIT_v0.4.0-rc.6.md)
 - [更新日志](CHANGELOG.md)
 
-当前版本：`v0.4.0-rc.5`（预发布） · [MIT License](LICENSE)
+当前版本：`v0.4.0-rc.6`（预发布） · [MIT License](LICENSE)
