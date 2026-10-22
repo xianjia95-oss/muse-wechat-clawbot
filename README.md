@@ -6,7 +6,9 @@
 
 回复提交后立即发送，接收长轮询与发送使用独立连接池。每条回复有稳定请求 ID、分段确认记录和耗时，支持进程重启后核对不确定结果。长文本每 2000 个 Unicode 码点顺序发送，无定时批量转发。
 
-当前 **v0.4.0-rc.3** 为单账号、单实例的生产加固候选版：增加状态独占锁、租约校验和工具步骤日志、容量/磁盘保护、readiness、保留策略、离线备份恢复及升级回滚。完整上线条件见 [生产运行与验收](docs/PRODUCTION.md)，真实 Muse hooks、手机收取/播放及 72 小时运行尚待验证。
+当前 **v0.4.0-rc.4** 为单账号、单实例的生产加固候选版：增加状态独占锁、租约校验和工具步骤日志、容量/磁盘保护、readiness、保留策略、离线备份恢复及升级回滚。完整上线条件见 [生产运行与验收](docs/PRODUCTION.md)，真实 Muse hooks、手机收取/播放及 72 小时运行尚待验证。
+
+rc.4 修复恢复已发送任务时误报空队列，新增 Linux 后台工具监督器、完成结果唤醒和只读逐条回执核查。生图/API 超时拖住连发消息时，须同步采用 [连续消息处理流程](docs/BURST_MESSAGES.md)，让单个 Muse 消息循环继续接待短消息；仅升级桥不会自动改掉同步等待工具的 worker。
 
 rc.3 修复旧 inbox 命令与后台状态锁冲突，默认只领取一个任务，并区分租约拒绝的具体原因。新增领取结果的私密文件保存，用于 [跨班次交接](docs/MUSE.md#跨班次交接)。无回复时先按 [排查说明](docs/TROUBLESHOOTING.md) 采集只读证据；[rc.2 复审记录](docs/AUDIT_v0.4.0-rc.2.md) 保留供查阅。
 
@@ -29,7 +31,7 @@ npm start
 
 另开终端运行 `node src/cli.mjs status`。用户先在微信启用 ClawBot 插件，并发消息建立回复上下文。扫码命令打印唯一图片路径，单码客户端等待上限 5 分钟，微信可能提前返回过期；确认后删除图片。手机若要求输入配对数字，按登录日志的 verification_required 和 [验证码步骤](docs/MUSE.md#手机要求配对验证码时) 继续。
 
-部署到 Meta Muse：将源码上传到 Muse 云端，发送 [部署指令](docs/给Muse的指令.txt)。也可先执行 `python scripts/build_app_package.py`，再上传生成的 `dist/muse-link-v0.4.0-rc.3.zip`。详见 [Muse 部署](docs/MUSE.md)、[图片与视频回传](docs/MEDIA.md)、[API 与耗时](docs/API.md) 和 [教程与腾讯协议核对](docs/REFERENCE.md)。
+部署到 Meta Muse：将源码上传到 Muse 云端，发送 [部署指令](docs/给Muse的指令.txt)。也可先执行 `python scripts/build_app_package.py`，再上传生成的 `dist/muse-link-v0.4.0-rc.4.zip`。详见 [Muse 部署](docs/MUSE.md)、[图片与视频回传](docs/MEDIA.md)、[API 与耗时](docs/API.md) 和 [教程与腾讯协议核对](docs/REFERENCE.md)。
 
 ## 发送与定位
 

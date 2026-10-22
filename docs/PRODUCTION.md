@@ -1,6 +1,6 @@
 # 生产运行与验收
 
-当前版本 **0.4.0-rc.3** 是生产加固候选版。代码和本地故障测试不能证明 Meta Muse 的实际 hooks、微信账号收发和手机媒体播放已经通过。完成本文的真实验收后，才能为该部署作出上线判断。
+当前版本 **0.4.0-rc.4** 是生产加固候选版。代码和本地故障测试不能证明 Meta Muse 的实际 hooks、微信账号收发和手机媒体播放已经通过。完成本文的真实验收后，才能为该部署作出上线判断。
 
 ## 运行范围
 
@@ -17,7 +17,7 @@ API 只监听 loopback，除存活探针外都需要私密 token。用 init 生�
 1. 阅读变更，完成已领取任务或保存交接记录；暂停 Muse hook，停止服务。不要用新进程与旧桥同时轮询同一微信账号。
 2. 从新版本解压目录运行 `bash deploy/install.sh`。依赖先安装在 releases 的候选目录，失败不会切换 current。已有状态会在切换前备份到 `~/.local/share/muse-link/backups/pre-upgrade-*`。保留配置和登录，不自动启动服务。
 3. 更新 Muse worker，使用当前版本的 lease_token、renew、checkpoint 协议。旧配置省略 require_lease_token 时也默认为 true；旧 worker 不带 token 会返回 409，不能只升级后台。
-4. 合并需要的配置，启动服务，确认 status.version=0.4.0-rc.3、health 通过；dry_run hook 后启用。保留上一版及私密备份。
+4. 合并需要的配置，启动服务，确认 status.version=0.4.0-rc.4、health 通过；dry_run hook 后启用。保留上一版及私密备份。
 
 普通用户为以下 systemctl 命令加 `sudo -n`：
 
@@ -49,6 +49,8 @@ bash "$HOME/.local/share/muse-link/rollback.sh"
 领取取消后不会再分配任务；已分配但响应未到达客户端的任务，仍需等租约到期恢复。排队回复及媒体上传后会在每次 chat 提交前重新校验租约。租约只能拒绝旧 worker 后续调用桥，不能撤销已经在网络中或已提交到外部系统的操作。步骤日志与第三方工具不在一个事务中，**不保证任意外部副作用恰好执行一次**。对于付款、发布等操作，仍要使用目标系统的幂等键和相应人工授权。
 
 最终回复必须带当前 lease_token。accepted 后自动 ack；接收重复批次、重复回复、发送成功但未 ack 的重启不会自动再发。进度回复用稳定 reply_id。不要通过底层 send 绕过 Muse 的租约、路由与步骤检查。请将工具结果和生成文件路径也保存到 Muse 侧交接记录，单个 checkpoint 结果最多 16 KiB。
+
+连续消息不能被同步外部工具长期挡住；rc.4 增加的 Linux 后台监督器与完成唤醒，须按 [BURST_MESSAGES.md](BURST_MESSAGES.md) 更新真实 worker/hook 才生效。它不调用 Muse 模型或自动完成桥事件，后台目录须独立私密备份，活跃工具不应在升级/回滚时被盲目重跑。仅替换 daemon 无法改变平台 worker 的阻塞执行方式。
 
 ## 容量与配置
 

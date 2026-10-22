@@ -1,4 +1,4 @@
-请在你的真实 Meta Muse 云端验收 Muse Link v0.4.0-rc.3，按 docs/PRODUCTION.md 执行，不把候选版或本地测试当作已生产验收。
+请在你的真实 Meta Muse 云端验收 Muse Link v0.4.0-rc.4，按 docs/PRODUCTION.md 执行，不把候选版或本地测试当作已生产验收。
 
 先检查真实环境、Node.js 24、持久化本地磁盘、systemd、代理和 Muse hooks 权限。若已部署，按 docs/给Muse升级的指令.txt 升级，保留配置、登录与状态；不得运行两套同账号轮询。使用 docs/MUSE.md 的完整 worker 协议，每个回复/ack 带当前 lease_token，长任务续租，外部工具执行前后记录 checkpoint。started 未完成的步骤必须核对，不能自动重复执行。
 
@@ -11,3 +11,5 @@
 从候选版源码目录启动只读观测：node scripts/observe.mjs --duration 72h --interval 30s --report "$HOME/private-reports/muse-link-72h.json"。需要你使用真实可持续后台进程管理，不依赖一次工具调用保持运行；不要伪称已等待 72 小时。期间持续产生代表性任务与媒体，记录 RSS、磁盘、服务重启和失败。观测报告 interrupted/unhealthy 不算通过，应说明故障和复验结果。报告不含凭据仍应私密存放。
 
 交付一份验收结果表，每项写“通过 / 失败 / 未执行”、证据位置和未解决问题，附脱敏的观测摘要。只有真实 hooks、手机收取/播放、故障恢复、备份/回滚和实际 72 小时全部完成，才判断这个部署是否可上线。不要将 token、验证码、session、原始数据库、完整私密备份或用户正文放进公开仓库。
+
+连续消息与长工具须同时按 docs/BURST_MESSAGES.md 更新实际 worker/hook，使用私密后台工具结果和真实队列排空循环，核实取消额外的 90 秒消息去重；不能只升级后台。验收增加“110 秒后台无副作用等待期间连续 5 条短消息均收到回复”，逐条保存提交/accepted/手机时间。

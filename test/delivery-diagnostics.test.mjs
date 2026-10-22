@@ -152,3 +152,22 @@ test('existing or unwritable claim output fails before leasing another event', a
   await assert.rejects(cli(path, ['muse', 'next', '--output', join(directory, 'missing', 'task.json')]));
   assert.equal(store.count(), 1);
 });
+
+test('message ledger distinguishes pre-submit delays from accepted sends and acknowledgements without final replies', async (t) => {
+  const { bridge, store, path, config } = await api(t);
+  add(bridge, 'ledger-accepted'); add(bridge, 'ledger-acked-only'); add(bridge, 'ledger-leased');
+  const muse = new MuseAdapter(bridge);
+  const first = (await muse.next()).tasks[0];
+  await muse.reply({ event_id: first.event_id, lease_token: first.lease_token, text: 'PRIVATE-REPLY' });
+  const second = (await muse.next()).tasks[0]; store.ack([second.event_id]);
+  const third = (await muse.next()).tasks[0];
+  const before = store.event(third.event_id);
+  const script = fileURLToPath(new URL('../scripts/queue-report.mjs', import.meta.url));
+  const { stdout } = await exec(process.execPath, [script, '--config', path, '--since', '1h']);
+  const report = JSON.parse(stdout);
+  assert.equal(report.messages.length, 3);
+  assert.deepEqual(new Set(report.messages.map((entry) => entry.stage)), new Set(['final_reply_accepted', 'ack_without_accepted_final', 'leased_no_final_submission']));
+  assert.equal(report.first_claim_time_available, false);
+  for (const value of [third.lease_token, config.api_token, 'PRIVATE-TEXT', 'PRIVATE-REPLY']) assert.equal(stdout.includes(value), false);
+  assert.deepEqual(store.event(third.event_id), before);
+});

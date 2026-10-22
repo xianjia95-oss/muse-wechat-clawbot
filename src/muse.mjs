@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { setImmediate as yieldLoop } from 'node:timers/promises';
 import { fail, integer } from './errors.mjs';
 
 // These are bridge adapter commands for Muse's native hooks. They do not call
@@ -12,29 +13,35 @@ export class MuseAdapter {
 
   async next(options = {}, signal) {
     if (this.bridge.store.get('restore_review_required', false)) fail('restore_review_required', 'Reconcile restored state before claiming or executing tasks.', 409);
-    const events = await this.bridge.claim({ ...options, limit: options.limit ?? 1 }, signal);
-    const tasks = [];
-    for (const event of events) {
-      const finalId = museRequestId(event.event_id);
-      const completed = this.bridge.store.send(finalId);
-      if (completed) this.bridge.store.db.prepare('INSERT OR IGNORE INTO send_events VALUES (?,?)').run(finalId, event.event_id);
-      // Recover a crash after WeChat accepted the reply but before inbox ack.
-      if (event.kind !== 'alert' && completed?.state === 'accepted') {
-        this.bridge.store.ack([event.event_id]);
-        this.bridge.log('task_acknowledged', { request_id: finalId, source: 'accepted_recovery' });
-        continue;
+    const deadline = performance.now() + integer(options.wait ?? 0, 0, 60000, 'wait');
+    for (;;) {
+      const events = await this.bridge.claim({ ...options, limit: options.limit ?? 1, wait: Math.max(0, Math.ceil(deadline - performance.now())) }, signal);
+      const tasks = [];
+      for (const event of events) {
+        const finalId = museRequestId(event.event_id);
+        const completed = this.bridge.store.send(finalId);
+        if (completed) this.bridge.store.db.prepare('INSERT OR IGNORE INTO send_events VALUES (?,?)').run(finalId, event.event_id);
+        // Recover a crash after WeChat accepted the reply but before inbox ack.
+        if (event.kind !== 'alert' && completed?.state === 'accepted') {
+          this.bridge.store.ack([event.event_id]);
+          this.bridge.log('task_acknowledged', { request_id: finalId, source: 'accepted_recovery' });
+          continue;
+        }
+        tasks.push({
+          ...event,
+          execution: { steps: this.bridge.store.steps(event.event_id), needs_review: this.bridge.store.steps(event.event_id).some((step) => step.state === 'started') },
+          completion: {
+            request_id: finalId,
+            state: completed?.state ?? 'not_submitted',
+            ...(completed?.result ? { result: completed.result } : {}),
+          },
+        });
       }
-      tasks.push({
-        ...event,
-        execution: { steps: this.bridge.store.steps(event.event_id), needs_review: this.bridge.store.steps(event.event_id).some((step) => step.state === 'started') },
-        completion: {
-          request_id: finalId,
-          state: completed?.state ?? 'not_submitted',
-          ...(completed?.result ? { result: completed.result } : {}),
-        },
-      });
+      if (tasks.length || !events.length) return { tasks };
+      // An accepted-recovery-only batch is not an empty inbox. Keep draining
+      // without preleasing extra work or restarting the long-poll deadline.
+      await yieldLoop();
     }
-    return { tasks };
   }
 
   renew(body) {

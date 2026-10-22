@@ -70,7 +70,7 @@ MUSE_REPLY
 
 ## 升级和真实验收
 
-将 v0.4.0-rc.3 部署包与更新后的“给 Muse 的指令”一起交给 Muse。按 docs/MUSE.md 的升级步骤暂停 hook、停止旧 muse-link、安装并重启，保留原配置和 SQLite 状态。重新注册或更新旧 hook 中的“只能纯文字”指令。检查服务 status 的 version=0.4.0-rc.3，capabilities.send 包含 image、video；只查看新 CLI 的 --help 不足以确认后台已升级。
+将 v0.4.0-rc.4 部署包与更新后的“给 Muse 的指令”一起交给 Muse。按 docs/MUSE.md 的升级步骤暂停 hook、停止旧 muse-link、安装并重启，保留原配置和 SQLite 状态。重新注册或更新旧 hook 中的“只能纯文字”指令。检查服务 status 的 version=0.4.0-rc.4，capabilities.send 包含 image、video；只查看新 CLI 的 --help 不足以确认后台已升级。
 
 从微信分别要求生成一张小图片和一个短 MP4。Muse 应报告真实本地路径、request_id、上传及发送耗时；在手机核对图片能打开、视频可播放。图片和视频都通过后，再检查文字与多个附件、重复提交无重复发送、上传失败续传。接口 accepted 不代表手机已收取或可播放。
 

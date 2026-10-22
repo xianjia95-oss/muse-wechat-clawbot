@@ -1,6 +1,6 @@
 # 在 Meta Muse 云端部署
 
-独立程序 Muse Link v0.4.0-rc.3，将 Meta Muse 对接微信 ClawBot。需要 Muse 自己的 Linux、Node.js 24+ / npm、运行中的 systemd、服务安装权限和 Muse hooks。文字与图片/视频回传的实际账号收取仍待验证。Muse 使用自身的任务能力处理消息，本项目不调用或替换其模型。
+独立程序 Muse Link v0.4.0-rc.4，将 Meta Muse 对接微信 ClawBot。需要 Muse 自己的 Linux、Node.js 24+ / npm、运行中的 systemd、服务安装权限和 Muse hooks。文字与图片/视频回传的实际账号收取仍待验证。Muse 使用自身的任务能力处理消息，本项目不调用或替换其模型。
 
 先请用户在微信“我 → 设置 → 插件”确认并启用 ClawBot。部署使用 Muse 自己的云端，不要求额外公网 IP；云实例必须能持续运行桥、访问腾讯 HTTPS 接口并注册平台原生 hooks。
 
@@ -26,14 +26,14 @@ Windows 可从源代码执行 npm ci、node src/cli.mjs init、node src/cli.mjs 
 
 ## 从 Muse Link v0.2.x / v0.3.x 升级
 
-完成已领取的任务或持久化交接进度，暂停现有微信 hook。停止 muse-link 服务后，从 v0.4.0-rc.3 新解压目录运行安装器，保留原配置、登录和 SQLite 状态，不删除数据库：
+完成已领取的任务或持久化交接进度，暂停现有微信 hook。停止 muse-link 服务后，从 v0.4.0-rc.4 新解压目录运行安装器，保留原配置、登录和 SQLite 状态，不删除数据库：
 
 ```bash
 systemctl stop muse-link
 bash deploy/install.sh
 ```
 
-普通用户为 systemctl 加 sudo -n。安装器会先离线备份、将候选版装入 releases，再切换 current，保留上一版供回滚。同步按本页更新 worker 的 lease_token、renew 和 checkpoint；旧配置也默认要求 token。详见 [生产运维](PRODUCTION.md)。安装器保留配置，已有配置缺少 media_roots 时默认 ~/workspace；按 [媒体说明](MEDIA.md) 把生成工具实际输出目录合并到配置，再按下方步骤启动服务。更新旧 hook 中的纯文字限制，重新 dry_run 并启用。muse-link status 必须显示 version=0.4.0-rc.3、capabilities.send 含 image/video，不能只根据新 CLI 的版本判断后台升级成功。已有会话健康时无需重新扫码。可直接使用 [升级指令](给Muse升级的指令.txt)。
+普通用户为 systemctl 加 sudo -n。安装器会先离线备份、将候选版装入 releases，再切换 current，保留上一版供回滚。同步按本页更新 worker 的 lease_token、renew 和 checkpoint；旧配置也默认要求 token。详见 [生产运维](PRODUCTION.md)。安装器保留配置，已有配置缺少 media_roots 时默认 ~/workspace；按 [媒体说明](MEDIA.md) 把生成工具实际输出目录合并到配置，再按下方步骤启动服务。更新旧 hook 中的纯文字限制，重新 dry_run 并启用。muse-link status 必须显示 version=0.4.0-rc.4、capabilities.send 含 image/video，不能只根据新 CLI 的版本判断后台升级成功。已有会话健康时无需重新扫码。可直接使用 [升级指令](给Muse升级的指令.txt)。
 
 ## 扫码
 
@@ -77,6 +77,8 @@ muse-link health
 ## 注册 hook 和完整唤醒指令
 
 脚本 `~/hooks/scripts/muse-link-wechat.sh`，建议 poll_interval_secs=5，以实际平台支持为准并记录生效值。Muse 必须把 wake/silent 输出适配成平台实际协议，先 dry_run 再 enable；dry_run 不得 pull。记录真实 hook 标识、启用状态、检测间隔和 worker 工具权限。更新或替换旧 hook，不要两套同时运行。把下面全部写入新 hook 的任务指令：
+
+连发消息和耗时工具按 [连续消息处理流程](BURST_MESSAGES.md) 执行。每条结束后立即继续 next，不能每条都等待新 hook；长工具先持久化并用 Linux 后台监督器执行，返回后处理其他消息，逐轮检查完成结果。不要在消息循环中同步等待上百秒的 API。原生平台另加的 90 秒去重不能屏蔽新消息/工具结果。--limit 1 不等于平台禁止并行，本流程保留单个 Muse 模型 worker，后台只运行工具进程。
 
 1. 异常唤醒时检查 status、health 和 systemd 日志，在 Muse 聊天报告，不擅自重启用户主动停止的服务。有待处理事件时继续排空，不能因为 backlog 告警就永远不领取任务。
 2. 按下方“跨班次交接”先建立私密文件，执行 `muse-link muse next --limit 1 --lease 30m --output '<新建私密目录>/task.json'`，将真实 event_id、lease_token、lease_until、execution 和 completion 持久化，不能只保留在聊天上下文。默认单个领取，显式批量只用于能处理全部任务的 worker。每 5 分钟用 `muse-link muse renew '<event_id>' --lease-token '<lease_token>' --lease 30m` 续租；续租失败停止后续操作，不改用过期 token。

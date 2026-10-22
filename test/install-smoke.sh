@@ -39,6 +39,14 @@ hook="$HOME/hooks/scripts/muse-link-wechat.sh"
 [ ! -e "$HOME/.local/state/muse-link/bridge.sqlite" ]
 [ "$(sh "$hook")" = 'wake: Muse 微信桥异常：muse-link health failed; inspect poll, storage, unresolved sends and worker backlog' ]
 [ "$(sh "$hook")" = silent ]
+# Job-result wakeups must bypass the health alert cooldown, even with no inbox.
+job_root="$HOME/.local/state/muse-link-worker/jobs"
+mkdir -p "$job_root/complete"
+chmod 700 "$job_root" "$job_root/complete"
+printf '%s\n' '{"id":"complete","state":"succeeded","settled_at":null}' > "$job_root/complete/job.json"
+[ "$(sh "$hook")" = 'wake: Muse 有 1 个后台工具结果待核对回传' ]
+node "$target/current/scripts/tool-job.mjs" settle --dir "$job_root" --id complete --reviewed
+[ "$(sh "$hook")" = silent ]
 grep -q '^ExecStart=/usr/local/bin/node .*/current/src/cli.mjs run$' "$unit"
 first="$(readlink -f "$target/current")"
 [ -f "$first/scripts/observe.mjs" ] && [ -f "$first/docs/PRODUCTION.md" ] && [ -f "$first/config.example.json" ]
