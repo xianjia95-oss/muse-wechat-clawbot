@@ -23,7 +23,7 @@
 3. 首次提交当前公开源码，再将 GitHub 新仓库页面提供的地址设为 `origin` 并推送。命令示例：
 
    ```bash
-   git add .
+   git add -- path/to/reviewed-file
    git diff --cached --stat
    git commit -m "Initial open-source release of Muse Link"
    git branch -M main
@@ -52,3 +52,5 @@ python scripts/build_app_package.py
 版本说明应保留实际能力边界：本地模拟通过，真实 Muse hooks、微信手机收取及视频播放待验收；不承诺固定耗时，不声称读取微信图片或视频。
 
 候选版在 GitHub 勾选 prerelease；保留已有 v0.3.0 资产。CI 另运行本地 stress 和 Linux 安装/回滚模拟。只有 [生产验收](PRODUCTION.md#真实验收与发布门槛) 的真实环境项目完成，才能判断部署可上线；不要将候选版改称已通过 72 小时测试。
+
+源码包使用 `scripts/public-files.json` 的明确文件清单，新增文件须逐项审阅后加入；本地调试记录放 `local-debug/` 或 `dist/`。该清单不会限制 Git 提交，暂存前须检查内容，避免将现场报告、实际 API 地址和运行标识写入公开文件。上述发布步骤仅在验证通过并取得发布授权后执行。

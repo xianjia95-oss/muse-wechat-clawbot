@@ -8,7 +8,10 @@ export function deliveryDiagnostics({ status = {}, readiness = {}, metrics = {} 
   const queue = pick(status.queue ?? readiness.queue, ['pending', 'ready', 'leased', 'oldest_ready_ms', 'oldest_pending_ms', 'next_lease_expiry_ms', 'stalled_leases', 'oldest_lease_activity_ms', 'started_steps', 'unresolved_steps', 'unknown_sends']);
   queue.ready ??= Math.max(0, (queue.pending ?? 0) - (queue.leased ?? 0));
   const worker = pick(status.worker, ['since', 'claim_requests', 'claimed_events', 'last_claim_at', 'last_task_at', 'reply_requests', 'last_reply_at', 'last_ingest_at']);
-  if (status.worker?.last_api_error) worker.last_api_error = pick(status.worker.last_api_error, ['at', 'action', 'code', 'status', 'lease_reason', 'lease_until', 'acked_ms', 'server_time']);
+  if (status.worker?.last_api_error) {
+    worker.last_api_error = pick(status.worker.last_api_error, ['at', 'action', 'code', 'status', 'lease_reason', 'lease_until', 'acked_ms', 'server_time']);
+    for (const field of ['task_request_id', 'request_id']) if (/^muse-[a-f0-9]{64}$/.test(status.worker.last_api_error[field] ?? '')) worker.last_api_error[field] = status.worker.last_api_error[field];
+  }
   const findings = [];
   const add = (code, next) => { if (!findings.some((finding) => finding.code === code)) findings.push({ code, next }); };
   const consumer = consumerProgress(queue, status.worker ? worker : undefined, readiness.consumer?.warn_after_ms ?? 60000, now);

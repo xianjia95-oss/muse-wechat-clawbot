@@ -15,3 +15,6 @@ unknown/rejected先核对，不换ID重发；failed可安全续传时使用原�
 连续消息与长工具须同时按 docs/BURST_MESSAGES.md 更新实际 worker/hook，使用私密后台工具结果和真实队列排空循环，核实取消额外的 90 秒消息去重；不能只升级后台。验收增加“110 秒后台无副作用等待期间连续 5 条短消息均收到回复”，逐条保存提交/accepted/手机时间。
 
 rc.5 媒体 reply 加 --async，先保存原正文/路径/稳定 request_id，收到 pending 后继续接待短消息，每轮查原回执并续租；全部 accepted 后自动 ack，再结清工具通知。unknown/rejected 不重发。工具监督器意外消失时按 BURST_MESSAGES.md 做 reviewed reconcile，活跃进程组会拒绝，interrupted 不表示业务成功；不删除原 ID 或锁。
+
+
+当前值守模式以docs/给Muse恢复常驻worker的指令.txt和docs/NATIVE_PARALLEL.md为准：主代理启动多个真实原生常驻worker，它们各自直接next/reply并持续消费，不再逐条等待hook。新池确认工作后再结束旧职责，rc.5健康桥可直接调整；全池忙仍排队，刷新自动恢复须另验。未经用户验证不推送或发布。

@@ -36,13 +36,19 @@ muse-link diagnose
 journalctl -u muse-link -n 100 --no-pager
 ```
 
-- queue.ready > 0：消息入库等待 worker；查真实 hook 启用状态、实际间隔、执行命令和退出码，不是发送连接池在等长轮询。
+- queue.ready > 0：消息入库等待 worker；先查池中真实handle、忙闲、直接next及退出码；全池已停再查主级补位入口和hook投递，不是发送连接池在等长轮询。
 - queue.leased > 0：任务已领取而未确认；ready=0 不代表处理完成。检查原 worker 进度和 next_lease_expiry_ms，不能盲目释放正在执行工具的任务。
 - worker.last_reply_at 尚未出现：本次服务启动后未看到 muse reply，查 worker 是否先在主聊天结束、遗漏回传或提前 ack。API 被拒绝也会有 last_api_error，不能只看发送成功日志。
 - delivery.queued / uploading / sending：回复已进入桥，分别定位同收件人排队、媒体上传或腾讯 chat 请求；oldest_inflight_ms 是已提交工作的最长等待。accepted 不等于手机显示。
 - task_acknowledged 日志的 source 区分 explicit_ack、final_reply 和 accepted_recovery；用稳定 request_id 关联日志，不记录正文、token 或微信账号。
 
 ## stale_lease 的具体含义
+
+先区分执行者的文字结论与真实拒绝：只有报告而无reply调用记录、退出码或错误JSON时，记“是否提交/拒绝原因未记录”。其他exec均返回0并不能证明该reply成功，也不能证明从未调用。成功接管时原token有效，只证明接管时原记录仍可用，不能倒推执行者当时实际传入了同一个完整值。
+
+本地待验证修订为worker_api_rejected日志及diagnose的worker.last_api_error增加task_request_id和request_id（后者仅可推导时存在），均为稳定散列，用于关联同事件及final/progress；不输出原event_id、token、正文。其他任务成功、同任务progress成功或较早开始请求的完成不会清掉对应final拒绝。last_api_error仍只保留当前进程最新一条，会被更新的拒绝覆盖，重启也会丢失；需要保留脱敏日志与失败命令退出码，不能把这个字段当完整审计历史。
+
+本地新CLI支持 [从原交接文件读取完整租约](MUSE.md#从原交接文件读取租约本地待验证修订)，减少手工截断。源码更新不会自动升级部署，不能直接给现有rc.5命令加参数。已有CLI应在受控本地代码里从原文件读取完整值，不打印或手工截短，更不能用当前数据库token替换原始值。
 
 | lease_reason | 核对及处理 |
 | --- | --- |

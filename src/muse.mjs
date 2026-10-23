@@ -20,16 +20,18 @@ export class MuseAdapter {
       for (const event of events) {
         const finalId = museRequestId(event.event_id);
         const completed = this.bridge.store.send(finalId);
+        const steps = this.bridge.store.steps(event.event_id);
+        const needsReview = steps.some((step) => step.state === 'started');
         if (completed) this.bridge.store.db.prepare('INSERT OR IGNORE INTO send_events VALUES (?,?)').run(finalId, event.event_id);
         // Recover a crash after WeChat accepted the reply but before inbox ack.
-        if (event.kind !== 'alert' && completed?.state === 'accepted') {
+        if (event.kind !== 'alert' && completed?.state === 'accepted' && !needsReview) {
           this.bridge.store.ack([event.event_id]);
           this.bridge.log('task_acknowledged', { request_id: finalId, source: 'accepted_recovery' });
           continue;
         }
         tasks.push({
           ...event,
-          execution: { steps: this.bridge.store.steps(event.event_id), needs_review: this.bridge.store.steps(event.event_id).some((step) => step.state === 'started') },
+          execution: { steps, needs_review: needsReview },
           completion: {
             request_id: finalId,
             state: completed?.state ?? 'not_submitted',
@@ -51,7 +53,13 @@ export class MuseAdapter {
     if (!body || typeof body.event_id !== 'string' || typeof body.step !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(body.step) || !['started', 'completed'].includes(body.phase)) fail('invalid_checkpoint', 'event_id, step and phase=started/completed are required.');
     if (Buffer.byteLength(JSON.stringify(body.result ?? null)) > 16384) fail('checkpoint_too_large', 'Checkpoint result must be at most 16 KiB.', 413);
     this.bridge.resources.check(Buffer.byteLength(JSON.stringify(body)) + 4096);
-    if (!this.bridge.store.steps(body.event_id).some((entry) => entry.step === body.step) && this.bridge.store.steps(body.event_id).length >= 1024) fail('checkpoint_capacity', 'At most 1024 recorded steps per task.', 413);
+    const steps = this.bridge.store.steps(body.event_id);
+    const prior = steps.find((entry) => entry.step === body.step);
+    if (body.phase === 'started' && prior?.state !== 'completed' && this.bridge.store.send(museRequestId(body.event_id))) {
+      this.bridge.store.requireLease(body.event_id, body.lease_token);
+      fail('task_final_submitted', 'A final reply was already submitted; reconcile its outcome before any new operation.', 409);
+    }
+    if (!prior && steps.length >= 1024) fail('checkpoint_capacity', 'At most 1024 recorded steps per task.', 413);
     return this.bridge.store.checkpoint(body.event_id, body.lease_token, body.step, body.phase, body.result, body.reviewed === true);
   }
   async reply(body) {

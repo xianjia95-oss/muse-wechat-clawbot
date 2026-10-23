@@ -8,18 +8,19 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fixture, deferred, reply } from './helpers.mjs';
 import { createApi } from '../src/server.mjs';
-import { MuseAdapter } from '../src/muse.mjs';
+import { MuseAdapter, museRequestId } from '../src/muse.mjs';
 import { lockState } from '../src/state-lock.mjs';
 import { deliveryDiagnostics } from '../src/diagnostics.mjs';
 import { consumerProgress } from '../src/worker-progress.mjs';
 import { health } from '../src/operations.mjs';
+import { detectHook, probeResult } from '../src/hook-detector.mjs';
 
 const exec = promisify(execFile);
 const cliPath = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 const cli = async (path, args) => JSON.parse((await exec(process.execPath, [cliPath, '--config', path, ...args])).stdout);
 const add = (bridge, id) => bridge.ingest({ msgs: [{ message_id: id, from_user_id: 'owner', item_list: [{ type: 1, text_item: { text: 'PRIVATE-TEXT' } }] }] });
-async function api(t) {
-  const f = fixture(t); f.config.require_lease_token = true;
+async function api(t, transport = {}) {
+  const f = fixture(t, transport); f.config.require_lease_token = true;
   const server = createApi(f.bridge); server.listen(0, '127.0.0.1'); await once(server, 'listening');
   t.after(async () => { server.closeAllConnections(); await new Promise((done) => server.close(done)); });
   f.config.listen.port = server.address().port;
@@ -74,6 +75,52 @@ test('diagnostics expose leased work and worker rejections without claiming or l
   const completed = await fetch(origin + '/v1/muse/replies', { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify({ event_id: task.event_id, lease_token: task.lease_token, text: 'done' }) });
   assert.equal(completed.status, 200); await completed.json();
   assert.equal((await cli(path, ['diagnose'])).worker.last_api_error, undefined);
+});
+
+test('a rejected final reply retains task correlation across unrelated and progress successes', async (t) => {
+  const { bridge, origin, headers, path, calls } = await api(t);
+  const logs = []; bridge.log = (name, value) => logs.push({ name, ...value });
+  add(bridge, 'rejected-final'); add(bridge, 'other-final');
+  const muse = new MuseAdapter(bridge), first = (await muse.next()).tasks[0], other = (await muse.next()).tasks[0];
+  const post = async (body) => {
+    const response = await fetch(origin + '/v1/muse/replies', { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    return { status: response.status, body: await response.json() };
+  };
+  const rejected = await post({ event_id: first.event_id, lease_token: first.lease_token.slice(0, 16), text: 'PRIVATE-REPLY' });
+  assert.equal(rejected.status, 409); assert.equal(rejected.body.lease_reason, 'token_mismatch');
+  const failure = { ...bridge.worker.last_api_error };
+  assert.equal(failure.task_request_id, museRequestId(first.event_id));
+  assert.equal(failure.request_id, museRequestId(first.event_id));
+  assert.equal((await post({ event_id: other.event_id, lease_token: other.lease_token, text: 'OTHER-RESULT' })).status, 200);
+  assert.deepEqual(bridge.worker.last_api_error, failure);
+  assert.equal((await post({ event_id: first.event_id, lease_token: first.lease_token, mode: 'progress', reply_id: 'verified-blocker', text: 'VERIFIED-BLOCKER' })).status, 200);
+  assert.deepEqual(bridge.worker.last_api_error, failure);
+  const report = await cli(path, ['diagnose']);
+  assert.equal(report.worker.last_api_error.task_request_id, failure.task_request_id);
+  assert.equal(report.worker.last_api_error.request_id, failure.request_id);
+  const evidence = JSON.stringify({ report, logs });
+  for (const secret of [first.lease_token, first.lease_token.slice(0, 16), 'PRIVATE-TEXT', 'PRIVATE-REPLY', first.event_id]) assert.equal(evidence.includes(secret), false);
+  assert.equal(logs.filter((entry) => entry.name === 'worker_api_rejected').length, 1);
+  assert.equal((await post({ event_id: first.event_id, lease_token: first.lease_token, text: 'FINAL-RESULT' })).status, 200);
+  assert.equal(bridge.worker.last_api_error, null); assert.equal(calls.length, 3);
+});
+
+test('an earlier in-flight success cannot erase a newer rejection for the same task', { timeout: 10000 }, async (t) => {
+  const gate = deferred(), entered = deferred();
+  const { bridge, origin, headers } = await api(t, { sendText: async () => { entered.resolve(); await gate.promise; } });
+  t.after(() => gate.resolve());
+  add(bridge, 'inflight-error-race');
+  const task = (await new MuseAdapter(bridge).next()).tasks[0];
+  const post = async (body) => {
+    const response = await fetch(origin + '/v1/muse/replies', { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    return { status: response.status, body: await response.json() };
+  };
+  const sending = post({ event_id: task.event_id, lease_token: task.lease_token, text: 'RESULT' });
+  await entered.promise;
+  assert.equal((await post({ event_id: task.event_id, text: 'RESULT' })).body.lease_reason, 'missing_token');
+  const failure = { ...bridge.worker.last_api_error };
+  gate.resolve(); assert.equal((await sending).status, 200);
+  assert.deepEqual(bridge.worker.last_api_error, failure);
 });
 
 test('diagnostic script works with rc.2-shaped status and performs only three read requests', async (t) => {
@@ -131,6 +178,63 @@ test('consumer evidence respects custom grace, recent successful claims, leased 
   const report = deliveryDiagnostics({ status: { queue } }, now);
   assert.equal(report.consumer.state, 'telemetry_unavailable');
   assert.equal(report.findings.some((item) => item.code === 'worker_claim_gap'), false);
+});
+
+test('an unresolved leased operation and readiness 503 do not block another same-chat claim or reply', { timeout: 10000 }, async (t) => {
+  const { bridge, store, origin, headers, calls } = await api(t);
+  bridge.poll = { state: 'waiting', last_ok_at: new Date().toISOString(), error: null };
+  const post = async (route, body) => {
+    const response = await fetch(origin + route, {
+      method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    return { status: response.status, body: await response.json() };
+  };
+  const claim = async () => {
+    const response = await fetch(origin + '/v1/muse/tasks?limit=1', { headers });
+    assert.equal(response.status, 200);
+    return (await response.json()).tasks[0];
+  };
+  // This models bridge state while an external executor has no result. It does
+  // not emulate Muse's native permission UI or prove platform task isolation.
+  add(bridge, 'external-operation-waiting');
+  const waiting = await claim();
+  assert.equal((await post('/v1/muse/checkpoints', {
+    event_id: waiting.event_id, lease_token: waiting.lease_token, step: 'external-model-list', phase: 'started',
+  })).status, 200);
+  store.db.prepare('UPDATE events SET lease_activity_ms=? WHERE id=?').run(Date.now() - 1200000, waiting.event_id);
+  const waitingEvent = store.event(waiting.event_id), waitingSteps = store.steps(waiting.event_id);
+
+  add(bridge, 'independent-short-message');
+  store.db.prepare('UPDATE events SET received_ms=? WHERE id=?').run(Date.now() - 360000, 'muse:independent-short-message');
+  const response = await fetch(origin + '/v1/health', { headers });
+  assert.equal(response.status, 503);
+  const readiness = await response.json();
+  assert.ok(readiness.problems.includes('worker_lease_stalled'));
+  assert.ok(readiness.problems.includes('worker_backlog'));
+  // Even an active warning cooldown must not suppress a ready message.
+  const wake = await detectHook({
+    probe: () => probeResult(readiness, response.status), pending: () => 0,
+    readAlert: () => { throw new Error('Ready work must bypass alert cooldown'); },
+    writeAlert: () => { throw new Error('Ready work must not change warning state'); },
+    clearAlert: () => { throw new Error('Ready work must not change warning state'); },
+  });
+  assert.equal(wake.decision, 'wake');
+
+  const short = await claim();
+  assert.equal(short.event_id, 'muse:independent-short-message');
+  assert.notEqual(short.lease_token, waiting.lease_token);
+  const sent = await post('/v1/muse/replies', { event_id: short.event_id, lease_token: short.lease_token, text: 'SHORT-RESULT' });
+  assert.equal(sent.status, 200); assert.equal(sent.body.state, 'accepted');
+  assert.notEqual(store.event(short.event_id).acked_ms, null);
+  assert.equal(calls.length, 1); assert.equal(calls[0][1], 'owner'); assert.equal(calls[0][2], 'SHORT-RESULT');
+  assert.deepEqual(store.event(waiting.event_id), waitingEvent);
+  assert.deepEqual(store.steps(waiting.event_id), waitingSteps);
+  assert.equal((await post('/v1/muse/replies', {
+    event_id: waiting.event_id, lease_token: waiting.lease_token, text: 'Cannot finish an unresolved operation',
+  })).body.error, 'task_step_uncertain');
+  const finalHealth = health(bridge);
+  assert.equal(finalHealth.healthy, false); assert.ok(finalHealth.problems.includes('worker_lease_stalled'));
+  assert.equal(finalHealth.queue.ready, 0); assert.equal(finalHealth.queue.leased, 1);
 });
 
 test('delivery status separates recipient queueing from a pending network send', async (t) => {

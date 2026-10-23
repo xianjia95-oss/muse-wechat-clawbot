@@ -43,6 +43,17 @@ function requestId(encoded) {
   return id;
 }
 
+function taskErrorScope(action, body) {
+  const id = body?.event_id ?? (action === 'ack' && Array.isArray(body?.event_ids) && body.event_ids.length === 1 ? body.event_ids[0] : undefined);
+  if (typeof id !== 'string' || !id || id.length > 512) return {};
+  const scope = { task_request_id: museRequestId(id) };
+  if (action === 'reply') {
+    if ((body.mode ?? 'final') === 'final') scope.request_id = scope.task_request_id;
+    else if (body.mode === 'progress' && typeof body.reply_id === 'string' && /^[A-Za-z0-9_.:-]{1,64}$/.test(body.reply_id)) scope.request_id = museRequestId(id, 'progress', body.reply_id);
+  }
+  return scope;
+}
+
 export function createApi(bridge) {
   const muse = new MuseAdapter(bridge);
   let active = 0;
@@ -52,9 +63,18 @@ export function createApi(bridge) {
     response.once('close', () => { active--; });
     const controller = new AbortController();
     response.on('close', () => controller.abort());
-    let action;
+    let action, scope = {};
+    const errorAtStart = bridge.worker.last_api_error;
+    const readWorkerBody = async () => {
+      const body = await readJson(request);
+      scope = taskErrorScope(action, body);
+      return body;
+    };
     response.once('finish', () => {
-      if (action && response.statusCode < 300 && bridge.worker.last_api_error?.action === action) bridge.worker.last_api_error = null;
+      const error = bridge.worker.last_api_error;
+      // A different event, progress reply or older in-flight success must not
+      // erase a newer rejection. Durable logs retain each rejection separately.
+      if (action && response.statusCode < 300 && error && error === errorAtStart && error.action === action && error.task_request_id === scope.task_request_id && error.request_id === scope.request_id) bridge.worker.last_api_error = null;
     });
     try {
       const url = new URL(request.url, 'http://localhost');
@@ -75,11 +95,11 @@ export function createApi(bridge) {
         return json(response, 200, await bridge.send(body));
       }
       if (route === 'POST /v1/muse/replies') {
-        const result = await muse.reply(await readJson(request));
+        const result = await muse.reply(await readWorkerBody());
         return json(response, result.submitted ? 202 : 200, result);
       }
-      if (route === 'POST /v1/muse/renew') return json(response, 200, muse.renew(await readJson(request)));
-      if (route === 'POST /v1/muse/checkpoints') return json(response, 200, muse.checkpoint(await readJson(request)));
+      if (route === 'POST /v1/muse/renew') return json(response, 200, muse.renew(await readWorkerBody()));
+      if (route === 'POST /v1/muse/checkpoints') return json(response, 200, muse.checkpoint(await readWorkerBody()));
       if (route === 'GET /v1/events' || route === 'GET /v1/muse/tasks') {
         const binding = url.searchParams.get('binding');
         if (binding && binding !== bridge.config.binding) fail('unknown_binding', 'Unknown binding.', 404);
@@ -92,11 +112,11 @@ export function createApi(bridge) {
         return json(response, 200, { events: await bridge.claim(options, controller.signal) });
       }
       if (route === 'POST /v1/events/ack') {
-        const body = await readJson(request);
+        const body = await readWorkerBody();
         if (!Array.isArray(body?.event_ids) || !body.event_ids.length || body.event_ids.length > 100 || body.event_ids.some((id) => typeof id !== 'string')) fail('invalid_ids', 'event_ids requires 1..100 strings.');
-        if (bridge.config.require_lease_token !== false) for (const id of body.event_ids) {
-          bridge.store.requireLease(id, body.lease_tokens?.[id] ?? body.lease_token);
-          if (bridge.store.steps(id).some((step) => step.state === 'started')) fail('task_step_uncertain', 'Resolve unfinished tool steps before acknowledging.', 409);
+        for (const id of body.event_ids) {
+          if (bridge.config.require_lease_token !== false) bridge.store.requireLease(id, body.lease_tokens?.[id] ?? body.lease_token);
+          bridge.store.requireAckable(id);
         }
         const acked = bridge.store.ack(body.event_ids);
         for (const id of body.event_ids) bridge.log('task_acknowledged', { request_id: museRequestId(id), source: 'explicit_ack' });
@@ -117,7 +137,7 @@ export function createApi(bridge) {
       return json(response, 404, { error: 'not_found' });
     } catch (error) {
       if (action) {
-        bridge.worker.last_api_error = { at: new Date().toISOString(), action, code: error instanceof BridgeError ? error.code : 'internal_error', status: error instanceof BridgeError ? error.status : 500 };
+        bridge.worker.last_api_error = { at: new Date().toISOString(), action, ...scope, code: error instanceof BridgeError ? error.code : 'internal_error', status: error instanceof BridgeError ? error.status : 500 };
         if (error.code === 'stale_lease') Object.assign(bridge.worker.last_api_error, { lease_reason: error.details?.lease_reason, lease_until: error.details?.lease_until, acked_ms: error.details?.acked_ms, server_time: error.details?.server_time });
         bridge.log('worker_api_rejected', { ...bridge.worker.last_api_error });
       }

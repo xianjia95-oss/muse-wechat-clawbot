@@ -1,4 +1,4 @@
-import { closeSync, fstatSync, fsyncSync, ftruncateSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmdirSync, unlinkSync, writeSync } from 'node:fs';
+import { closeSync, constants, fstatSync, fsyncSync, ftruncateSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readSync, readdirSync, rmdirSync, unlinkSync, writeSync } from 'node:fs';
 import { dirname, isAbsolute, join, parse } from 'node:path';
 import { fail } from './errors.mjs';
 
@@ -12,6 +12,33 @@ function checkDirectory(directory, requirePrivate = true) {
     if (requirePrivate && parent === directory && process.platform !== 'win32' && (stat.mode & 0o077)) fail('unsafe_task_output', 'Task output requires a private directory (mode 0700).');
     if (parent === parse(parent).root) break;
   }
+}
+
+// Read the captured lease, never the current database token. The caller still
+// supplies an event ID so a wrong handoff cannot silently reply to another task.
+export function readTaskLease(path, eventId, endpoint, configPath) {
+  if (!isAbsolute(path) || typeof eventId !== 'string' || !eventId || eventId.length > 512) fail('invalid_task_file', 'Provide an absolute task file and its explicit event ID.');
+  checkDirectory(dirname(path));
+  const original = lstatSync(path);
+  if (!original.isFile() || original.isSymbolicLink()) fail('unsafe_task_file', 'Task file must be a regular private file, not a symbolic link.');
+  const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0));
+  let document;
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile() || stat.dev !== original.dev || stat.ino !== original.ino || (process.platform !== 'win32' && (stat.mode & 0o077))) fail('unsafe_task_file', 'Task file identity changed or permissions are not private.');
+    if (stat.size < 1 || stat.size > 4 * 1024 * 1024) fail('invalid_task_file', 'Task file must contain a saved claim of at most 4 MiB.');
+    const bytes = Buffer.alloc(stat.size + 1);
+    let size = 0, read;
+    while (size < bytes.length && (read = readSync(fd, bytes, size, bytes.length - size, size))) size += read;
+    const after = fstatSync(fd);
+    if (size !== stat.size || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) fail('unsafe_task_file', 'Task file changed while reading; retain it for review.');
+    try { document = JSON.parse(bytes.subarray(0, size).toString('utf8')); }
+    catch { fail('invalid_task_file', 'Task file is not a complete saved claim.'); }
+  } finally { closeSync(fd); }
+  if (document?.claim_state !== 'response_saved' || document.endpoint !== endpoint || document.config_path !== configPath || !Array.isArray(document.tasks)) fail('task_file_scope_mismatch', 'Use the original saved claim with the same config and daemon endpoint.');
+  const matches = document.tasks.filter((task) => task?.event_id === eventId);
+  if (matches.length !== 1 || typeof matches[0].lease_token !== 'string' || !/^[a-f0-9]{48}$/.test(matches[0].lease_token)) fail('invalid_task_file', 'Task file must contain exactly one matching event with its complete captured lease.');
+  return matches[0].lease_token;
 }
 
 export function reserveTaskFile(path, endpoint, configPath) {

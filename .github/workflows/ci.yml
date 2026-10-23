@@ -29,6 +29,7 @@ jobs:
       - run: npm test
       - run: npm run demo
       - run: npm run soak -- --duration 5s
+      - run: python -m unittest discover -s test -p test_public_package.py
       - run: python scripts/build_app_package.py
       - name: Upload source archive
         if: runner.os == 'Linux'

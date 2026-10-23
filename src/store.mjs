@@ -139,6 +139,10 @@ export class Store {
       started_steps: this.db.prepare("SELECT count(*) AS n FROM task_steps s JOIN events e ON e.id=s.event_id WHERE s.state='started' AND e.acked_ms IS NULL").get().n,
     };
   }
+  requireAckable(id) {
+    if (this.steps(id).some((step) => step.state === 'started')) fail('task_step_uncertain', 'Resolve unfinished tool steps before acknowledging.', 409);
+    if (this.db.prepare("SELECT 1 FROM sends s JOIN send_events e ON e.request_id=s.id WHERE e.event_id=? AND s.state='pending' LIMIT 1").get(id)) fail('task_reply_inflight', 'Wait for the associated reply result before acknowledging.', 409);
+  }
   ack(ids) {
     return this.transaction(() => {
       let count = 0;

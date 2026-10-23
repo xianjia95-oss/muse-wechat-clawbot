@@ -16,7 +16,7 @@ import { login, submitVerifyCode, waitForVerifyCode } from './login.mjs';
 import { lockState } from './state-lock.mjs';
 import { maintain } from './maintenance.mjs';
 import { backupState, restoreState, verifyBackup } from './backup.mjs';
-import { reserveTaskFile, reserveTaskDirectory } from './task-file.mjs';
+import { reserveTaskFile, reserveTaskDirectory, readTaskLease } from './task-file.mjs';
 
 process.umask(0o077);
 const print = (value) => console.log(JSON.stringify(value));
@@ -34,6 +34,7 @@ const help = `muse-link ${VERSION} — Meta Muse / WeChat ClawBot bridge (Node.j
   muse ack EVENT_ID... --lease-token TOKEN
   muse renew EVENT_ID --lease-token TOKEN [--lease 30m]
   muse checkpoint EVENT_ID --lease-token TOKEN --step NAME --phase started|completed [--text -] [--reviewed]
+    reply/renew/checkpoint: --task-file /private/task.json may replace --lease-token TOKEN
   review REQUEST_ID --reviewed --text -
   maintain                         (service must be stopped)
   backup --output /private/backup   (service must be stopped)
@@ -83,7 +84,7 @@ async function main() {
     binding: { type: 'string' }, liveness: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
     progress: { type: 'boolean' }, 'reply-id': { type: 'string' },
     image: { type: 'string', multiple: true }, video: { type: 'string', multiple: true },
-    'lease-token': { type: 'string' }, step: { type: 'string' }, phase: { type: 'string' },
+    'lease-token': { type: 'string' }, 'task-file': { type: 'string' }, step: { type: 'string' }, phase: { type: 'string' },
     reviewed: { type: 'boolean' }, output: { type: 'string' }, 'output-dir': { type: 'string' },
     offline: { type: 'boolean' },
     async: { type: 'boolean' },
@@ -91,6 +92,8 @@ async function main() {
   const command = positionals[0];
   if (values.help || !command) { console.log(help); return; }
   if (values.async && !(command === 'muse' && positionals[1] === 'reply')) fail('invalid_argument', '--async is only supported for muse reply.');
+  if (values['task-file'] !== undefined && !(command === 'muse' && ['reply', 'renew', 'checkpoint'].includes(positionals[1]))) fail('invalid_argument', '--task-file is only supported for muse reply/renew/checkpoint.');
+  if (values['task-file'] !== undefined && values['lease-token'] !== undefined) fail('invalid_argument', 'Choose --task-file or --lease-token, not both.');
   if (values.output && command !== 'backup' && !(command === 'muse' && positionals[1] === 'next')) fail('invalid_argument', '--output is only supported for backup and muse next.');
   if (values['output-dir'] && !(command === 'muse' && positionals[1] === 'next')) fail('invalid_argument', '--output-dir is only supported for muse next.');
   if (values['output-dir'] && values.output) fail('invalid_argument', 'Choose --output or --output-dir, not both.');
@@ -140,8 +143,9 @@ async function main() {
   }
   if (command === 'muse') {
     const action = positionals[1];
+    const leaseToken = values['task-file'] !== undefined ? readTaskLease(expand(values['task-file']), positionals[2], localUrl(config), config.path) : values['lease-token'];
     if (['renew', 'checkpoint'].includes(action)) {
-      const body = { event_id: positionals[2], lease_token: values['lease-token'] };
+      const body = { event_id: positionals[2], lease_token: leaseToken };
       if (action === 'renew') body.lease_ms = integer(duration(values.lease, 1800000), 1000, 3600000, 'lease');
       else Object.assign(body, { step: values.step, phase: values.phase, result: values.text === '-' ? await stdin() : values.text ?? null, reviewed: values.reviewed === true });
       const result = await local(config, `/v1/muse/${action === 'renew' ? 'renew' : 'checkpoints'}`, { body });
@@ -179,7 +183,7 @@ async function main() {
       const text = values.text === '-' ? await stdin() : values.text;
       const result = await local(config, '/v1/muse/replies', { timeout: 10 * 60000, body: {
         event_id: positionals[2], text, mode: values.progress ? 'progress' : 'final',
-        lease_token: values['lease-token'],
+        lease_token: leaseToken,
         ...(values.async ? { async: true } : {}),
         ...(media.length ? { media } : {}),
         ...(values['reply-id'] !== undefined ? { reply_id: values['reply-id'] } : {}),
@@ -257,9 +261,9 @@ async function main() {
       if (action === 'ack') {
         const ids = positionals.slice(2);
         if (!ids.length) fail('missing_ids', 'Provide event IDs.');
-        if (config.require_lease_token !== false) for (const id of ids) {
-          store.requireLease(id, values['lease-token']);
-          if (store.steps(id).some((step) => step.state === 'started')) fail('task_step_uncertain', 'Resolve unfinished tool steps before acknowledging.', 409);
+        for (const id of ids) {
+          if (config.require_lease_token !== false) store.requireLease(id, values['lease-token']);
+          store.requireAckable(id);
         }
         print({ acked: store.ack(ids) }); return;
       }

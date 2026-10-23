@@ -10,6 +10,7 @@
 npm ci
 npm test
 npm run demo
+python -m unittest discover -s test -p test_public_package.py
 python scripts/build_app_package.py
 ```
 
@@ -28,3 +29,5 @@ python scripts/build_app_package.py
 发送链路须保留每个收件人的顺序、稳定请求 ID、已确认分段记录，以及结果不确定时禁止自动重发的语义。修改这些行为应覆盖相应恢复场景。不要把微信消息拼入 shell 命令，也不要把私密本地 API 暴露到公网。
 
 `package.json` 的 `private: true` 仅防止意外发布 npm 包，不影响 MIT 开源或从 GitHub 安装。
+
+源码包只包含 `scripts/public-files.json` 中明确审阅的路径。新增公共文件时逐项更新清单；现场报告、聊天、真实 API 地址、任务标识和调试记录留在本地忽略目录，不加入清单或 Git。清单不会阻止手工提交其他文件，提交前仍须检查完整暂存差异。

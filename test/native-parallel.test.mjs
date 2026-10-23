@@ -49,6 +49,66 @@ test('ten independent clients claim unique events and return in completion order
   assert.equal((await reply(tasks[0])).cached, true); assert.equal(calls.length, 11);
 });
 
+// These are persistent HTTP consumers, not real Muse agents. In particular this
+// does not exercise the platform's spawn, task lifetime or permission prompts.
+test('three resident consumers keep polling across bursts while one task is blocked', { timeout: 15000 }, async (t) => {
+  const { bridge, store, calls, add, api, reply } = await setup(t);
+  const blocked = deferred(), firstClaimed = deferred(), firstBurst = deferred(), secondBurst = deferred();
+  const owners = new Map(), tokens = new Set(), completed = [], histories = [[], [], []];
+  let stopping = false;
+  const worker = async (slot) => {
+    while (!stopping) {
+      const response = await api('/v1/muse/tasks?limit=1&lease=30m&wait=1s');
+      assert.equal(response.status, 200);
+      for (const task of response.tasks) {
+        assert.equal(owners.has(task.event_id), false, 'an event has one resident owner');
+        assert.equal(tokens.has(task.lease_token), false);
+        owners.set(task.event_id, slot); tokens.add(task.lease_token);
+        histories[slot].push(task.event_id);
+        if (task.text === 'resident-long') { firstClaimed.resolve(task); await blocked.promise; }
+        const result = await reply(task);
+        assert.equal(result.state, 'accepted');
+        assert.equal(result.request_id, museRequestId(task.event_id));
+        completed.push(task.event_id);
+        if (completed.length === 9) firstBurst.resolve();
+        if (completed.length === 15) secondBurst.resolve();
+      }
+    }
+  };
+  // Start all consumers before ingestion, so they also exercise long-poll wake.
+  const running = histories.map((_, slot) => worker(slot));
+  const failure = Promise.all(running).then(() => { throw new Error('resident pool unexpectedly exited'); });
+  let watchdog;
+  const deadline = new Promise((_, reject) => { watchdog = setTimeout(() => reject(new Error('resident pool made no progress')), 8000); });
+  try {
+    while (bridge.worker.claim_requests < 3) {
+      await Promise.race([new Promise((resolve) => setTimeout(resolve, 5)), failure, deadline]);
+    }
+    add('resident-long');
+    const long = await Promise.race([firstClaimed.promise, failure, deadline]);
+    for (let i = 0; i < 9; i++) add(`resident-first-${i}`);
+    await Promise.race([firstBurst.promise, failure, deadline]);
+    assert.equal(store.event(long.event_id).acked_ms, null);
+    assert.equal(store.queueStats().pending, 1);
+    // The same workers consume another burst without any new model task spawn.
+    for (let i = 0; i < 6; i++) add(`resident-second-${i}`);
+    await Promise.race([secondBurst.promise, failure, deadline]);
+    assert.equal(store.event(long.event_id).acked_ms, null);
+    assert.equal(calls.length, 15);
+    assert.ok(histories.some((events, slot) => slot !== owners.get(long.event_id) && events.length > 1));
+    stopping = true; blocked.resolve();
+    await Promise.all(running);
+    assert.equal(owners.size, 16); assert.equal(tokens.size, 16);
+    assert.equal(calls.length, 16); assert.equal(store.queueStats().pending, 0);
+    assert.equal(completed.at(-1), long.event_id);
+    assert.equal((await reply(long)).cached, true); assert.equal(calls.length, 16);
+  } finally {
+    clearTimeout(watchdog);
+    stopping = true; blocked.resolve();
+    await Promise.allSettled(running);
+  }
+});
+
 test('parallel task tokens cannot reply, renew, checkpoint or ack another event', async (t) => {
   const { store, calls, add, claim, api, reply } = await setup(t);
   add('owner-a'); add('owner-b'); const [a, b] = await Promise.all([claim(), claim()]);

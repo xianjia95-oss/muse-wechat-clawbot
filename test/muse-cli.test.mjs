@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createApi } from '../src/server.mjs';
 import { privateJson } from '../src/config.mjs';
 import { fixture, deferred } from './helpers.mjs';
@@ -46,6 +46,68 @@ test('real Muse CLI performs claim, progress, final and idempotent retry through
   const retry = await cli(path, ['muse', 'reply', 'muse:123', '--text', '-'], '任务完成😀');
   assert.equal(retry.cached, true);
   assert.equal(calls.length, 2);
+});
+
+test('offline CLI rejects an entire ack batch when an associated reply is pending', async (t) => {
+  const { bridge, config, directory, store } = fixture(t);
+  const path = join(directory, 'config.json'); privateJson(path, config);
+  for (const id of ['free-ack', 'pending-ack']) bridge.ingest({ msgs: [{ message_id: id, from_user_id: 'owner', item_list: [] }] });
+  store.claim(2);
+  store.createSend('pending-reply', 'fixture-fingerprint', 'owner', ['fixture-client-id'], 'muse:pending-ack');
+  await assert.rejects(cli(path, ['inbox', 'ack', 'muse:free-ack', 'muse:pending-ack', '--offline']), /task_reply_inflight/);
+  assert.equal(store.event('muse:free-ack').acked_ms, null);
+  assert.equal(store.event('muse:pending-ack').acked_ms, null);
+  store.finish('pending-reply', 'accepted', { state: 'accepted' });
+  assert.equal((await cli(path, ['inbox', 'ack', 'muse:free-ack', 'muse:pending-ack', '--offline'])).acked, 2);
+});
+
+test('task-file CLI reads the full captured lease for renew, checkpoints and replies without copying it into arguments', async (t) => {
+  const { bridge, config, directory, calls, store } = fixture(t); config.require_lease_token = true;
+  const server = createApi(bridge); server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(async () => { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); });
+  config.listen.port = server.address().port;
+  const path = join(directory, 'config.json'), output = join(directory, 'original-task.json'); privateJson(path, config);
+  bridge.ingest({ msgs: [{ message_id: 'captured-full-lease', from_user_id: 'owner', item_list: [] }] });
+  const task = (await cli(path, ['muse', 'next', '--output', output])).tasks[0];
+  const original = readFileSync(output, 'utf8');
+  assert.equal((await cli(path, ['muse', 'renew', task.event_id, '--task-file', output])).event_id, task.event_id);
+  await cli(path, ['muse', 'checkpoint', task.event_id, '--task-file', output, '--step', 'local-result', '--phase', 'started']);
+  await cli(path, ['muse', 'checkpoint', task.event_id, '--task-file', output, '--step', 'local-result', '--phase', 'completed', '--text', '-'], 'Verified result');
+  const result = await cli(path, ['muse', 'reply', task.event_id, '--task-file', output, '--text', '-'], 'COMPLETE-RESULT');
+  assert.equal(result.state, 'accepted'); assert.equal(result.event_completed, true);
+  assert.equal(JSON.stringify(result).includes(task.lease_token), false);
+  assert.notEqual(store.event(task.event_id).acked_ms, null); assert.equal(calls.length, 1);
+  assert.equal(readFileSync(output, 'utf8'), original);
+  const before = bridge.worker.reply_requests;
+  await assert.rejects(cli(path, ['muse', 'reply', 'muse:wrong-event', '--task-file', output, '--text', '-'], 'not sent'), /invalid_task_file/);
+  await assert.rejects(cli(path, ['muse', 'reply', task.event_id, '--task-file', output, '--lease-token', 'short', '--text', '-'], 'not sent'), /invalid_argument/);
+  assert.equal(bridge.worker.reply_requests, before);
+});
+
+test('task-file CLI preserves a superseded captured token and the server fences it instead of adopting a new lease', async (t) => {
+  const { bridge, config, directory, calls, store } = fixture(t); config.require_lease_token = true;
+  const server = createApi(bridge); server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  t.after(async () => { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); });
+  config.listen.port = server.address().port;
+  const path = join(directory, 'config.json'), oldFile = join(directory, 'old-task.json'), newFile = join(directory, 'new-task.json');
+  privateJson(path, config);
+  bridge.ingest({ msgs: [{ message_id: 'superseded-captured-lease', from_user_id: 'owner', item_list: [] }] });
+  const old = (await cli(path, ['muse', 'next', '--output', oldFile])).tasks[0];
+  const original = readFileSync(oldFile, 'utf8');
+  // Expire only this disposable fixture's lease, then acquire a distinct lease.
+  store.db.prepare('UPDATE events SET lease_until=0 WHERE id=?').run(old.event_id);
+  const current = (await cli(path, ['muse', 'next', '--output', newFile])).tasks[0];
+  assert.equal(current.event_id, old.event_id); assert.notEqual(current.lease_token, old.lease_token);
+  const before = store.event(old.event_id);
+  await assert.rejects(cli(path, ['muse', 'reply', old.event_id, '--task-file', oldFile, '--text', '-'], 'OLD-RESULT'), (error) => {
+    assert.match(error.message, /stale_lease/); assert.match(error.message, /token_mismatch/);
+    assert.equal(error.message.includes(old.lease_token), false); assert.equal(error.message.includes(current.lease_token), false);
+    return true;
+  });
+  assert.equal(calls.length, 0); assert.deepEqual(store.event(old.event_id), before);
+  assert.equal(readFileSync(oldFile, 'utf8'), original);
+  assert.equal((await cli(path, ['muse', 'reply', current.event_id, '--task-file', newFile, '--text', '-'], 'CURRENT-RESULT')).state, 'accepted');
+  assert.equal(calls.length, 1); assert.notEqual(store.event(current.event_id).acked_ms, null);
 });
 
 test('real Muse CLI sends an image-only reply and a video without requiring text', async (t) => {

@@ -10,11 +10,13 @@
 
 rc.4 遇到已经 accepted、但 ack 尚未完成的恢复记录时，会确认该记录后继续寻找真实待处理任务；不会仅因这一批全是恢复项就返回空数组。长等待沿用原时限，取消仍不会占用后续任务。limit=1 只表示单次领取量，不表示必须全局串行等待外部工具。长工具后台处理和只读逐条核查见 [BURST_MESSAGES.md](BURST_MESSAGES.md)。
 
+rc.7 本地候选修订：若 accepted 的历史记录仍有 started 步骤，不自动确认，返回原 completion 与 execution.needs_review=true。核实并结清后，重试原最终回复只复用 accepted 回执，不再发送。最终回复持久化后，新 started 步骤被 task_final_submitted 拒绝；已有步骤仍按原协议核对和完成。
+
 最终回复 `POST /v1/muse/replies`：
 
 ```json
 {
-  "event_id": "muse:example-event",
+  "event_id": "muse:demo-event",
   "lease_token": "领取该任务时返回的 token",
   "text": "Muse 的处理结果"
 }
@@ -91,6 +93,8 @@ CDN 上传在 media_timeout_ms（默认 120000）总时限内最多尝试三次�
 
 - `GET /v1/events?limit=20&lease=30m&wait=30s`：领取。limit 1..100、lease 1 秒..1 小时、wait 0..60 秒；等待请求有事件时立即返回。
 - `POST /v1/events/ack`：正文 `{"event_ids":["muse:123"],"lease_token":"当前领取 token"}`；多事件不同 token 用 lease_tokens 对象按 event_id 映射，处理完确认。
+
+  rc.7 本地候选修订：仍有关联 pending 回复时返回 409 task_reply_inflight，含 progress；有 started 步骤时返回 task_step_uncertain。批量内任一事件不满足条件，整批均不确认。accepted 的最终回复仍由桥自动确认，无需提前显式 ack。
 - `GET /v1/status`：version、capabilities、登录、接收状态、收件箱数量、发送中请求数；配套候选后台升级后应显示 version=0.4.0-rc.7、capabilities.send 含 image/video。
 - `GET /v1/metrics`：最近 300 请求的状态计数，以及成功请求耗时 p50/p95。失败和 pending 不混入成功耗时。
 - `GET /healthz`：进程存活；微信连通性看 status 或 muse-link health。
