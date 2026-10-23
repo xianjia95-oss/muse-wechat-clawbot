@@ -1,16 +1,16 @@
-请把现有 Muse Link 升级到上传的 v0.4.0-rc.6 生产加固候选版。保留微信账号、token、原配置、SQLite 和生成文件，健康会话无需重新扫码。不把候选版称为已通过生产验收。
+请把现有 Muse Link 升级到上传的 v0.4.0-rc.7 生产加固候选版。保留微信账号、token、原配置、SQLite 和生成文件，健康会话无需重新扫码。不把候选版称为已通过生产验收。
 
-当前 Muse 已反馈支持原生并行任务，优先按 docs/给Muse启用原生并行任务的指令.txt 更新调度：一个轻量值守者领取并派发，多个独立执行者各自续租、直接回复。4个后台工具名额不是原生任务上限。原生并行所需的独立事件租约在现有桥已具备；若暂不使用新增工具队列，可先改真实调度，无需为此单独重启健康服务。
+当前用户已选择原生并行，必须按docs/给Muse启用原生并行任务的指令.txt更新调度：只有主代理可作为轻量值守者领取并派发，普通子代理无再次派生权限，多个独立执行者各自续租、完成即直接回复。4个后台工具名额不是原生任务上限，不自动退回串行值守。原生并行所需的独立事件租约在现有桥已具备；若暂不使用新增工具队列，可先改真实调度，无需为此单独重启健康服务。
 
 先读 docs/PRODUCTION.md、docs/MUSE.md、docs/API.md。处理完已领取任务或记录交接后，暂停原生微信 hook、停止 muse-link 服务，再从新解压目录 bash deploy/install.sh。安装器先把依赖装入候选 releases 目录，离线备份原状态后切换 current，保留 previous；不自动启动服务。不运行两套同账号轮询，不导入或删除原 Muse Link 数据库。
 
-同步更新真实 Muse hook 的完整任务指令，采用 docs/MUSE.md 的 lease_token、renew、checkpoint 协议。新旧配置默认都要求当前 token；旧 worker 不带 token 将返回409。每次明确执行 muse next --limit 1 --output '<新建私密目录>/task.json'，按MUSE.md跨班次流程保存原始领取响应和任务进度，不能只保留在聊天上下文；新版默认只取1个，显式批量仅用于能处理全部任务的worker。长任务每5分钟续租30分钟。外部工具执行前先写稳定step的started，完成后写completed及可恢复结果；completed cached时跳过工具，恢复遗留started时先核对，不能自动重做。接班前确认旧worker及后台工具已停止，再使用原文件和正常校验恢复，不能读库抄token接管。租约只能拒绝桥的旧请求，不能撤销外部工具。
+同步更新真实 Muse hook 的完整任务指令，采用 docs/MUSE.md 的 lease_token、renew、checkpoint 协议。新旧配置默认都要求当前 token；旧 worker 不带 token 将返回409。按MUSE.md准备私密父目录，每次明确执行 muse next --limit 1 --wait 1s --output-dir "$HOME/.local/state/muse-link-worker/claims"，只保存非空返回的handoff_file，按MUSE.md跨班次流程保存原始领取响应和任务进度，不能只保留在聊天上下文；新版默认只取1个，显式批量仅用于能处理全部任务的worker。长任务每5分钟续租30分钟。外部工具执行前先写稳定step的started，完成后写completed及可恢复结果；completed cached时跳过工具，恢复遗留started时先核对，不能自动重做。接班前确认旧worker及后台工具已停止，再使用原文件和正常校验恢复，不能读库抄token接管。租约只能拒绝桥的旧请求，不能撤销外部工具。
 
 按实际工具输出位置合并 media_roots，保留其他字段；跨进程文件放持久化workspace，PrivateTmp下不要依赖另一进程/tmp。真实文件生成完整后，muse reply '<event_id>' --lease-token '<token>' --image '/实际结果.png' --video '/实际结果.mp4'，可带--text -从带引号heredoc传正文，最多4个媒体。图片20MiB、视频50MiB为本地限制，不转码。最终回复全部确认后自动ack，不能先最终文字结束后补图。进度用稳定reply-id，不结束任务。
 
 unknown/rejected不自动重发；核对微信和request结果，不换ID绕过。429/503/507先核对状态、修复或等待后同ID同内容重试。failed且retryable可用原文字和文件路径续传，不重做生成。步骤started未核对不能最终回复或ack。超过保留期限后旧ID不再永久去重，业务侧保留交接记录。
 
-启动服务，status必须是version=0.4.0-rc.6，health需至少一轮成功长轮询；检查capabilities.send含text/image/video。真实hook先dry_run再启用，记录标识、间隔和工具权限。按docs/给Muse生产验收的指令.txt执行手机文字/真实工具/图片/视频验收、故障恢复、备份恢复/回滚演练及实际72小时观测，给出通过/失败/未执行和证据位置。
+启动服务，status必须是version=0.4.0-rc.7，health需至少一轮成功长轮询；检查capabilities.send含text/image/video。真实hook先dry_run再启用，记录标识、间隔和工具权限。按docs/给Muse生产验收的指令.txt执行手机文字/真实工具/图片/视频验收、故障恢复、备份恢复/回滚演练及实际72小时观测，给出通过/失败/未执行和证据位置。
 
 恢复备份会暂停轮询、任务领取和新发送，先核对备份后已经执行的微信/外部动作，再人工approve；不能为了启动方便直接解除闸门。生产问题需代码回滚时，暂停hook、停服务、排空任务并核对unknown/工具步骤，再运行~/.local/share/muse-link/rollback.sh，只回滚代码不回退状态。具体操作以PRODUCTION.md为准，不公开私密备份或凭据。
 

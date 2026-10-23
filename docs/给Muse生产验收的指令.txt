@@ -1,6 +1,6 @@
 项目地址：https://github.com/xianjia95-oss/muse-wechat-clawbot
 
-请在你的真实 Meta Muse 云端验收 Muse Link v0.4.0-rc.6，按 docs/PRODUCTION.md 执行，不把候选版或本地测试当作已生产验收。先核对实际后台与源码；拉取源码不会自动升级后台或配置平台 hook，不为测试无故升级健康服务。
+请在你的真实 Meta Muse 云端验收 Muse Link v0.4.0-rc.7，按 docs/PRODUCTION.md 执行，不把候选版或本地测试当作已生产验收。先核对实际后台与源码；拉取源码不会自动升级后台或配置平台 hook，不为测试无故升级健康服务。
 
 按docs/ACCEPTANCE_CHECKLIST.md分阶段执行。先保留现有值守准备日志、真实hook/投递证据及恢复方式，然后通知用户仅从微信测试：A01单条、A11至A20一分钟连发、L01先进度回复再独立等待90秒期间S01至S03短回复；这几项不应依赖用户打开Muse主聊天。每条记录event_id、真实任务或会话运行标识、入库/领取/开始/提交/accepted时刻、手机收到与人工介入。不得用lease_until猜领取时刻。
 

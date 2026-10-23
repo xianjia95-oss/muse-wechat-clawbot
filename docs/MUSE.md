@@ -1,6 +1,6 @@
 # 在 Meta Muse 云端部署
 
-独立程序 Muse Link v0.4.0-rc.6，将 Meta Muse 对接微信 ClawBot。需要 Muse 自己的 Linux、Node.js 24+ / npm、运行中的 systemd、服务安装权限和 Muse hooks。文字与图片/视频回传的实际账号收取仍待验证。Muse 使用自身的任务能力处理消息，本项目不调用或替换其模型。
+独立程序 Muse Link v0.4.0-rc.7，将 Meta Muse 对接微信 ClawBot。需要 Muse 自己的 Linux、Node.js 24+ / npm、运行中的 systemd、服务安装权限和 Muse hooks。文字与图片/视频回传的实际账号收取仍待验证。Muse 使用自身的任务能力处理消息，本项目不调用或替换其模型。
 
 先请用户在微信“我 → 设置 → 插件”确认并启用 ClawBot。部署使用 Muse 自己的云端，不要求额外公网 IP；云实例必须能持续运行桥、访问腾讯 HTTPS 接口并注册平台原生 hooks。
 
@@ -26,14 +26,14 @@ Windows 可从源代码执行 npm ci、node src/cli.mjs init、node src/cli.mjs 
 
 ## 从 Muse Link v0.2.x / v0.3.x 升级
 
-完成已领取的任务或持久化交接进度，暂停现有微信 hook。停止 muse-link 服务后，从 v0.4.0-rc.6 新解压目录运行安装器，保留原配置、登录和 SQLite 状态，不删除数据库：
+完成已领取的任务或持久化交接进度，暂停现有微信 hook。停止 muse-link 服务后，从 v0.4.0-rc.7 新解压目录运行安装器，保留原配置、登录和 SQLite 状态，不删除数据库：
 
 ```bash
 systemctl stop muse-link
 bash deploy/install.sh
 ```
 
-普通用户为 systemctl 加 sudo -n。安装器会先离线备份、将候选版装入 releases，再切换 current，保留上一版供回滚。同步按本页更新 worker 的 lease_token、renew 和 checkpoint；旧配置也默认要求 token。详见 [生产运维](PRODUCTION.md)。安装器保留配置，已有配置缺少 media_roots 时默认 ~/workspace；按 [媒体说明](MEDIA.md) 把生成工具实际输出目录合并到配置，再按下方步骤启动服务。更新旧 hook 中的纯文字限制，重新 dry_run 并启用。muse-link status 必须显示 version=0.4.0-rc.6、capabilities.send 含 image/video，不能只根据新 CLI 的版本判断后台升级成功。已有会话健康时无需重新扫码。可直接使用 [升级指令](给Muse升级的指令.txt)。
+普通用户为 systemctl 加 sudo -n。安装器会先离线备份、将候选版装入 releases，再切换 current，保留上一版供回滚。同步按本页更新 worker 的 lease_token、renew 和 checkpoint；旧配置也默认要求 token。详见 [生产运维](PRODUCTION.md)。安装器保留配置，已有配置缺少 media_roots 时默认 ~/workspace；按 [媒体说明](MEDIA.md) 把生成工具实际输出目录合并到配置，再按下方步骤启动服务。更新旧 hook 中的纯文字限制，重新 dry_run 并启用。muse-link status 必须显示 version=0.4.0-rc.7、capabilities.send 含 image/video，不能只根据新 CLI 的版本判断后台升级成功。已有会话健康时无需重新扫码。可直接使用 [升级指令](给Muse升级的指令.txt)。
 
 ## 扫码
 
@@ -78,13 +78,17 @@ muse-link health
 
 脚本 `~/hooks/scripts/muse-link-wechat.sh`，建议 poll_interval_secs=5，以实际平台支持为准并记录生效值。Muse 必须把 wake/silent 输出适配成平台实际协议，先 dry_run 再 enable；dry_run 不得 pull。记录真实 hook 标识、启用状态、检测间隔和 worker 工具权限。更新或替换旧 hook，不要两套同时运行。把下面全部写入新 hook 的任务指令：
 
-平台调用 outcome=wake 不证明触发已经投递或调度者已开始。已有环境报告用 _hatch_hook_emit 输出 HATCH_HOOK_RESULT JSON，升级覆盖检测脚本后须保留适配，每次仅一个结果，不双重包装。按 [自动唤醒与交接](AUTOMATIC_DISPATCH.md) 核对真实投递/运行，验收无人操作主聊天时的冷启动与轮换。切换并行先准备不领取的待命新者，再交接激活，不先结束旧值守者。
+平台调用 outcome=wake 不证明触发已经投递或调度者已开始。已有环境报告用 _hatch_hook_emit 输出 HATCH_HOOK_RESULT JSON，rc.7安装/回滚保留自定义适配，仍须显式合并新探针并dry_run；每次仅一个结果，不双重包装。按 [自动唤醒与交接](AUTOMATIC_DISPATCH.md) 核对真实投递/主级运行，验收无人操作主聊天时的冷启动与轮换。切换并行先确认主代理有实际派生权限，再暂停旧串行者的新领取并交接；不能让普通子代理担任新调度者，不先结束旧值守者。
 
-当前 Muse 环境已反馈能派发多个独立任务，优先按 [原生并行调度](NATIVE_PARALLEL.md) 与 [给 Muse 的接入指令](给Muse启用原生并行任务的指令.txt) 执行：一个轻量值守调度者领取、保存私密文件、派发真实原生子任务后立即继续 next；每个子任务只处理自己的事件并直接回复，不等调度者收齐结果。调度者不执行长推理或等待长工具，相关追问/修改按依赖协调，独立结果按完成顺序回传。--limit 1 仅限制一次领取条数，不是全局并发限制；额外的 90 秒去重不能屏蔽新消息与完成结果。每个事件只有一个执行者，须记录真实原生 task handle 和私密交接。
+当前部署必须按用户选择的 [原生并行调度](NATIVE_PARALLEL.md) 与 [给 Muse 的接入指令](给Muse启用原生并行任务的指令.txt) 执行：一个轻量值守调度者领取、保存私密文件、派发真实原生子任务后立即继续 next；每个子任务只处理自己的事件并直接回复，不等调度者收齐结果。调度者不执行长推理或等待长工具，相关追问/修改按依赖协调，独立结果按完成顺序回传。--limit 1 仅限制一次领取条数，不是全局并发限制；额外的 90 秒去重不能屏蔽新消息与完成结果。每个事件只有一个执行者，须记录真实原生 task handle 和私密交接。
 
-下列 lease/checkpoint/reply 协议适用于每个事件的实际执行者。只有调度者执行 next，原生子任务读取已交接的原始领取文件，不再次 next 或与其他子任务共用“当前token”。没有原生并行时使用 [单模型保底流程](BURST_MESSAGES.md)。rc.6 的工具队列 4/4/1 初始档仅约束可信脚本，不是 Muse 任务上限；按 [工具队列指令](给Muse启用并发队列的指令.txt) 显式配置、renew 成功后刷新 queued 截止，dispatch 和检查结果/回执。有后台任务时 next --wait 1s，避免长等待推迟派发或结果检查。
+只读探针仅用于检测和诊断；wake后实际主级处理指令必须在有ready时领取并派发。不得将“只读、不next”的探针提示语当作唯一消费入口。surface=main、health通过或dry_run通过都不代替一次真实自动运行中的next/spawn证据，详见[AUTOMATIC_DISPATCH.md](AUTOMATIC_DISPATCH.md)。
 
-1. 异常唤醒时检查 status、health 和 systemd 日志，在 Muse 聊天报告，不擅自重启用户主动停止的服务。有待处理事件时继续排空，不能因为 backlog 告警就永远不领取任务。
+下列 lease/checkpoint/reply 协议适用于每个事件的实际执行者。只有调度者执行 next，原生子任务读取已交接的原始领取文件，不再次 next 或与其他子任务共用“当前token”。原生派发未接通时如实报告未完成，不自动套用 [历史单模型流程](BURST_MESSAGES.md) 代替并行。rc.6 的工具队列 4/4/1 初始档仅约束可信脚本，不是 Muse 任务上限；按 [工具队列指令](给Muse启用并发队列的指令.txt) 显式配置、renew 成功后刷新 queued 截止，dispatch 和检查结果/回执。有后台任务时 next --wait 1s，避免长等待推迟派发或结果检查。
+
+外部生图/API任务必须遵守 [次数与总耗时上限](EXTERNAL_API_TASKS.md)：由独立执行者运行，不占住调度者；HTTP单次超时不能代替整个任务截止。失败后不在主循环无限重试、换域名或换工具；生图提交结果未知时先核对，其他消息继续处理。桥的微信发送超时与外部生图超时是两套不同设置。
+
+1. 每次唤醒先复查当前 status/health，必要时读 diagnose 与可用服务日志；核对告警的 UTC 检测时间，延迟到达的旧告警不代表当前故障。当前已健康且无待办时静默结束，不因旧告警重启，也不擅自重启用户主动停止的服务。有待处理事件时继续排空，不能因为 backlog 告警就永远不领取任务。
 2. 领取者按下方“跨班次交接”先建立私密文件，执行 `muse-link muse next --limit 1 --lease 30m --output '<新建私密目录>/task.json'`，将真实 event_id、lease_token、lease_until、execution 和 completion 持久化，不能只保留在聊天上下文。原生子任务直接读取这份已交接的文件。默认单个领取，显式批量只用于能处理全部任务的调度者。接管前调度者负责续租，确认接管后由该事件执行者每 5 分钟用 `muse-link muse renew '<event_id>' --lease-token '<lease_token>' --lease 30m` 续租；续租失败停止后续操作，不改用过期 token。
 3. completion.state=unknown/rejected：先核对请求和手机，不重做任务或换 ID 发送。failed 且 retryable=true：恢复原进度和生成文件，修复原因后用原文字/路径续传，跳过已确认消息。不要重新生成整个结果。execution.needs_review=true 或存在 started 步骤时，核对外部系统、旧 worker 与工具结果，不能自动重复执行。
 4. kind=alert：只在 Muse 聊天报告，再使用当前 token ack。普通事件读取 text、voice_text；media_errors 必须如实说明，不声称已读取入站附件。空事件可记录忽略原因后 ack。
@@ -107,7 +111,7 @@ muse-link health
    MUSE_REPLY
    ```
 
-   事件和 token 使用领取结果，不能照抄占位符。用带引号的 heredoc 和不会出现在正文中的分隔符，不把用户文字拼进 shell。长任务先用同一 reply 命令加 `--progress --reply-id started` 发简短确认；每条进度有稳定 reply-id，不结束任务。
+   事件和 token 使用领取结果，不能照抄占位符。用带引号的 heredoc 和不会出现在正文中的分隔符，不把用户文字拼进 shell。微信只发真实结果，使用纯文本、无 Markdown；不发“收到，正在处理”等占位确认。仅在有实质阶段结果或已核实失败/阻塞时，用同一 reply 命令加 `--progress --reply-id '<稳定阶段编号>'`，控制频率、不编造预计耗时，不结束任务。普通问候直接回复，不额外占位。
 7. 生成图片/视频后，用真实工具导出完整本地文件到 media_roots，在同一最终 reply 加 `--image '/absolute/result.png'`、`--video '/absolute/result.mp4'`。最多 4 个媒体，可省略文字；图片 20 MiB、视频 50 MiB，本包不转码。只有 URL/媒体 ID 时先导出文件。不要先最终回复文字结束任务再补图；预览用 --progress --reply-id preview。PrivateTmp 下跨进程文件应放持久化 workspace，详见 MEDIA.md。
 
    rc.5 的媒体回复使用 `--async`，先私密保存原回复正文、媒体路径和 task.completion.request_id，再提交。返回 submitted=true/state=pending 后保存回执，立即继续领取其他消息；每轮查看原 request，不在消息循环中同步等待该上传。pending 时仍按每 5 分钟续租，接受后桥自动 ack；通知只能在 accepted 后结清。上传期间同一聊天的短文字可先发出，长任务结果要指出对应原请求。强制重启不会自动重发未完成异步请求，失败按下一项恢复。
@@ -117,19 +121,23 @@ muse-link health
 
 ## 跨班次交接
 
-原生并行模式下，值守调度者轮换不要求所有独立子任务结束；按 AUTOMATIC_DISPATCH.md 先准备待命新者，旧者暂停领取后交接激活，新者实际领取成功后才结束旧者。核对真实子任务 handle，仍运行的子任务继续处理各自事件，不重复派发。以下“旧 worker 结束/停止”约束同一个事件执行权的接管，不能用来把所有独立任务重新串行化。详见 NATIVE_PARALLEL.md 的派发、确认接管及创建结果不确定的处置。
+原生并行调度者必须是有派生权限的主代理，不能用普通子代理担任；值守调度者轮换不要求所有独立子任务结束；按 AUTOMATIC_DISPATCH.md 先验证主级接班者权限并待命，旧者暂停领取后交接激活，新者实际领取成功后才结束旧者；从串行子代理迁移时由现有主代理接管。核对真实子任务 handle，仍运行的子任务继续处理各自事件，不重复派发。以下“旧 worker 结束/停止”约束同一个事件执行权的接管，不能用来把所有独立任务重新串行化。详见 NATIVE_PARALLEL.md 的派发、确认接管及创建结果不确定的处置。
 
-每次领取使用新的私密目录；把目录位置写入 Muse 的持久化交接记录，后续班次先检查未完成记录，再领取新任务：
+rc.7 可由 CLI 为每次领取管理独立私密目录；把非空返回的 handoff_file 写入 Muse 持久化交接记录，后续班次先检查未完成记录，再领取新任务：
 
 ```bash
 umask 077
 mkdir -p "$HOME/.local/state/muse-link-worker"
 chmod 700 "$HOME/.local/state/muse-link-worker"
-handoff_dir="$(mktemp -d "$HOME/.local/state/muse-link-worker/claim.XXXXXXXX")"
-muse-link muse next --limit 1 --lease 30m --output "$handoff_dir/task.json"
+muse-link muse next --limit 1 --lease 30m --wait 1s \
+  --output-dir "$HOME/.local/state/muse-link-worker/claims"
 ```
 
 CLI 在请求前独占创建 0600 文件，拒绝覆盖旧记录；父目录须为私密真实目录。成功响应先写入并 fsync，再输出给 Muse，文件保存原始 tasks、endpoint 和 config_path。它包含正文和 token，只能本地读取和私密备份，不能上传仓库、粘贴进用户聊天或日志。该目录不属于桥的数据库备份；任务确认完成后按业务保留要求清理。工具结果、回复正文和生成文件位置仍需另行持久化。
+
+--output-dir 仅在确认本次响应 tasks=[] 后删除自己持有的文件和空目录，返回 handoff_file=null；非空、网络/写入失败、未知响应或目录/文件身份变化均保留，不递归删除。旧版 --output 仍兼容且不自动删除。所有 hook/单轮探针禁止 next 和 rm -rf claim.*；探测改用只读 health/diagnose。既有约 7.5 万空目录不自动清除，需先停止探针，逐个核实确为空、无交接/执行者归属，再另行维护，不混入在线恢复。
+
+平台角色限制和刷新恢复见 [运行环境恢复](RUNTIME_RECOVERY.md)：只有主代理能派生任务，普通子代理不得承担并行调度；刷新保留文件不等于旧进程或原生任务仍活跃。
 
 接班前先确认旧 worker 及其后台工具已结束或停止，再读取原文件；核对 config/endpoint、步骤和稳定 request_id。原 token 仍有效时可通过正常 renew 验证后接续，已 accepted 的回复只核对原请求，不重新执行。started 步骤先核实实际结果；换班本身不允许重复外部动作。不要并发运行两个 worker 使用同一交接文件，也不要直接从数据库取 token 接管。
 

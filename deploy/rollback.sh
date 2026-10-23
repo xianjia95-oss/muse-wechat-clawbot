@@ -34,9 +34,12 @@ if (existsSync(file)) {
 }
 JS
 node "$current/src/cli.mjs" backup --output "$TARGET/backups/pre-rollback-$stamp"
-if [ -f "$previous/hook.sh" ]; then
+hook="$HOME/hooks/scripts/muse-link-wechat.sh"
+if [ -f "$previous/hook.sh" ] && cmp -s "$hook" "$current/deploy/wechat-hook.sh"; then
     cp -p "$HOME/hooks/scripts/muse-link-wechat.sh" "$HOME/hooks/scripts/muse-link-wechat.sh.bak.$stamp"
     install -m 0700 "$previous/hook.sh" "$HOME/hooks/scripts/muse-link-wechat.sh"
+elif [ -f "$hook" ]; then
+    printf 'Preserved custom platform hook during rollback; verify its detector compatibility before enabling.\n'
 fi
 ln -s "$previous" "$TARGET/.rollback-current.$$"
 ln -s "$current" "$TARGET/.rollback-previous.$$"

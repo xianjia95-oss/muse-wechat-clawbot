@@ -15,7 +15,7 @@ files = [root / path for path in (
     "CONTRIBUTING.md", "SECURITY.md", "CHANGELOG.md", "config.example.json", "THIRD-PARTY.md",
     "LICENSE", "LICENSE.tencent", "scripts/benchmark.mjs",
     "scripts/demo.mjs", "scripts/soak.mjs", "scripts/observe.mjs", "scripts/diagnose.mjs",
-    "scripts/tool-job.mjs", "scripts/queue-report.mjs", "scripts/build_app_package.py",
+    "scripts/tool-job.mjs", "scripts/queue-report.mjs", "scripts/hook-check.mjs", "scripts/build_app_package.py",
 )]
 # Restrict included directories and extensions; do not recursively bundle arbitrary
 # JSON, databases, media, environment files or other data saved beside the source.

@@ -37,8 +37,17 @@ hook="$HOME/hooks/scripts/muse-link-wechat.sh"
 [ "$("$bin" inbox count)" = 0 ]
 # Read-only hook diagnostics must not create or migrate an offline database.
 [ ! -e "$HOME/.local/state/muse-link/bridge.sqlite" ]
-[ "$(sh "$hook")" = 'wake: Muse 微信桥异常：muse-link health failed; inspect poll, storage, unresolved sends and worker backlog' ]
+probe_output="$(sh "$hook")"
+case "$probe_output" in 'wake: Muse 微信桥 readiness: bridge_probe_unavailable'*) ;; *) printf '%s\n' "$probe_output" >&2; exit 1 ;; esac
 [ "$(sh "$hook")" = silent ]
+node -e 'const fs=require("fs"),p=process.env.HOME+"/.cache/muse-link/hook-alert-state.json",v=JSON.parse(fs.readFileSync(p)); if (!v.problems.includes("bridge_probe_unavailable") || (fs.statSync(p).mode & 0o777)!==0o600) process.exit(1)'
+# Even a missing-helper alert must retain its detection time and one-result format.
+MUSE_LINK_HOOK_FORMAT=hatch MUSE_LINK_HOOK_HELPER="$HOME/missing-helper.mjs" sh "$hook" | node -e '
+let input=""; for await (const chunk of process.stdin) input+=chunk;
+const lines=input.trim().split("\n"); if(lines.length!==1) process.exit(1);
+const value=JSON.parse(lines[0].slice("HATCH_HOOK_RESULT:".length));
+if(value.decision!=="wake" || !/hook_detector_missing; detected_at=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ; recheck current status/.test(value.reason)) process.exit(1);
+' --input-type=module
 # Job-result wakeups must bypass the health alert cooldown, even with no inbox.
 job_root="$HOME/.local/state/muse-link-worker/jobs"
 mkdir -p "$job_root/complete"
@@ -86,5 +95,20 @@ bash "$target/rollback.sh"
 [ "$(readlink -f "$target/current")" = "$first" ]
 [ "$(readlink -f "$target/previous")" = "$second" ]
 [ "$(find "$target/backups" -name manifest.json | wc -l)" -eq 2 ]
+# Custom platform adaptation survives both upgrade and subsequent rollback.
+# In particular rollback must not restore an old plain detector over it.
+cat > "$hook" <<'SH'
+#!/bin/sh
+printf '%s\n' 'HATCH_HOOK_RESULT:{"decision":"silent","reason":"platform adapter retained"}'
+SH
+custom_hash="$(sha256sum "$hook")"
+bash /work/deploy/install.sh
+[ "$(sha256sum "$hook")" = "$custom_hash" ]
+cmp -s "$hook" "$target/current/hook.sh"
+printf '# local platform adjustment\n' >> "$hook"
+custom_hash="$(sha256sum "$hook")"
+bash "$target/rollback.sh"
+[ "$(sha256sum "$hook")" = "$custom_hash" ]
+[ "$(sh "$hook")" = 'HATCH_HOOK_RESULT:{"decision":"silent","reason":"platform adapter retained"}' ]
 if grep -Eq '^(start|restart|enable)' "$TEST_CALLS"; then exit 1; fi
-printf 'PASS: Linux install, failed-stage isolation, active-service refusal, upgrade backup, rollback, private config and real hook\n'
+printf 'PASS: Linux install, failure isolation, upgrade backup, rollback, private config, bounded hook and custom adapter preservation\n'

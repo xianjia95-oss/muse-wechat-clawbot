@@ -36,6 +36,8 @@ v0.4.0-rc.5 可附 `"media":[{"type":"image","path":"/absolute/result.png"},{"ty
 
 rc.3 的 next 支持 `--output /private/new-task.json`。请求前独占创建 0600 文件，父目录须私密且不经过符号链接；先保存原始领取响应并 fsync，再输出。不能覆盖旧记录。文件含原 token 和消息正文，只用于本地交接；收到成功响应但保存失败时，退出非零并在 stdout 保留响应供原 worker 私密保存。不能只凭文件存在就执行任务，应检查 claim_state=response_saved 与 tasks，并按 [交接流程](MUSE.md#跨班次交接) 确认旧 worker 停止、校验租约和核对工具进度。
 
+rc.7 的 `muse next --output-dir /private/claims` 与 --output 互斥。父目录须已存在且无符号链接；claims 根目录以 0700 新建或验证已有私密目录。每次独立创建 claim.* / task.json；非空返回实际 handoff_file，确认空 tasks 后只移除自己持有的文件及空目录，handoff_file=null。没有收到有效空响应时保留现场，错误时 stderr 标识保留路径；不会清理旧目录、修改租约或确认事件。用于实际调度者；hook 探针不得执行 next。
+
 ## 即时回复
 
 `POST /v1/send`，Content-Type 为 application/json：
@@ -89,7 +91,7 @@ CDN 上传在 media_timeout_ms（默认 120000）总时限内最多尝试三次�
 
 - `GET /v1/events?limit=20&lease=30m&wait=30s`：领取。limit 1..100、lease 1 秒..1 小时、wait 0..60 秒；等待请求有事件时立即返回。
 - `POST /v1/events/ack`：正文 `{"event_ids":["muse:123"],"lease_token":"当前领取 token"}`；多事件不同 token 用 lease_tokens 对象按 event_id 映射，处理完确认。
-- `GET /v1/status`：version、capabilities、登录、接收状态、收件箱数量、发送中请求数；配套候选后台升级后应显示 version=0.4.0-rc.6、capabilities.send 含 image/video。
+- `GET /v1/status`：version、capabilities、登录、接收状态、收件箱数量、发送中请求数；配套候选后台升级后应显示 version=0.4.0-rc.7、capabilities.send 含 image/video。
 - `GET /v1/metrics`：最近 300 请求的状态计数，以及成功请求耗时 p50/p95。失败和 pending 不混入成功耗时。
 - `GET /healthz`：进程存活；微信连通性看 status 或 muse-link health。
 

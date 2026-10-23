@@ -56,7 +56,7 @@ MUSE_REPLY
 
 --image、--video 可重复；CLI 先放所有图片，再放所有视频，需要交错顺序可用 JSON API 的 media 数组。路径和 heredoc 都要正确引用，不能把用户文本拼进 shell。
 
-生成较久时，先发 --progress --reply-id started 的文字确认，再生成并用最终 reply 提交全部结果。预览图也能用 --progress --reply-id preview 发送。最终 reply 全部确认后自动 ack；不能先用最终文字回复完成事件，再试图向同一事件补图。生成任务的执行去重仍由 Muse 持久化记录。
+生成较久时不发“收到，正在处理”等占位确认。微信只发纯文本真实结果、无 Markdown；仅已有实质阶段结果或已核实失败/阻塞时，才用 --progress 与稳定 reply-id 发受控频率的进度。真实预览图可用 --progress --reply-id preview 发送。最终 reply 提交全部结果，全部确认后自动 ack；不能先用最终文字回复完成事件，再试图向同一事件补图。生成任务的执行去重仍由 Muse 持久化记录。
 
 ## 重试与耗时
 

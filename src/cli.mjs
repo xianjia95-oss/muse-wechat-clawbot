@@ -16,7 +16,7 @@ import { login, submitVerifyCode, waitForVerifyCode } from './login.mjs';
 import { lockState } from './state-lock.mjs';
 import { maintain } from './maintenance.mjs';
 import { backupState, restoreState, verifyBackup } from './backup.mjs';
-import { reserveTaskFile } from './task-file.mjs';
+import { reserveTaskFile, reserveTaskDirectory } from './task-file.mjs';
 
 process.umask(0o077);
 const print = (value) => console.log(JSON.stringify(value));
@@ -28,7 +28,7 @@ const help = `muse-link ${VERSION} — Meta Muse / WeChat ClawBot bridge (Node.j
   send --to WXID --text - --request-id UNIQUE_ID [--ready-at ISO_TIME]
   inbox count | inbox pull [--limit 1] [--lease 30m] [--wait 30s] [--offline]
   inbox ack EVENT_ID... --lease-token TOKEN [--offline]
-  muse next [--limit 1] [--lease 30m] [--wait 30s] [--output /private/new-task.json]
+  muse next [--limit 1] [--lease 30m] [--wait 30s] [--output /private/new-task.json | --output-dir /private/claims]
   muse reply EVENT_ID --lease-token TOKEN --text - [--progress --reply-id STABLE_ID] [--ready-at ISO_TIME] [--async]
     [--image /absolute/image.png] [--video /absolute/video.mp4] (repeatable; text optional with media)
   muse ack EVENT_ID... --lease-token TOKEN
@@ -84,7 +84,7 @@ async function main() {
     progress: { type: 'boolean' }, 'reply-id': { type: 'string' },
     image: { type: 'string', multiple: true }, video: { type: 'string', multiple: true },
     'lease-token': { type: 'string' }, step: { type: 'string' }, phase: { type: 'string' },
-    reviewed: { type: 'boolean' }, output: { type: 'string' },
+    reviewed: { type: 'boolean' }, output: { type: 'string' }, 'output-dir': { type: 'string' },
     offline: { type: 'boolean' },
     async: { type: 'boolean' },
   } });
@@ -92,6 +92,8 @@ async function main() {
   if (values.help || !command) { console.log(help); return; }
   if (values.async && !(command === 'muse' && positionals[1] === 'reply')) fail('invalid_argument', '--async is only supported for muse reply.');
   if (values.output && command !== 'backup' && !(command === 'muse' && positionals[1] === 'next')) fail('invalid_argument', '--output is only supported for backup and muse next.');
+  if (values['output-dir'] && !(command === 'muse' && positionals[1] === 'next')) fail('invalid_argument', '--output-dir is only supported for muse next.');
+  if (values['output-dir'] && values.output) fail('invalid_argument', 'Choose --output or --output-dir, not both.');
   if (values.offline && !(command === 'inbox' && ['pull', 'ack'].includes(positionals[1]))) fail('invalid_argument', '--offline is only supported for inbox pull/ack.');
   if (values.offline && duration(values.wait, 0) !== 0) fail('invalid_argument', 'Offline claims cannot wait for a running daemon.');
   const path = values.config ? expand(values.config) : defaultConfigPath();
@@ -151,20 +153,26 @@ async function main() {
       const limit = integer(Number(values.limit ?? 1), 1, 100, 'limit');
       const wait = integer(duration(values.wait, 0), 0, 60000, 'wait');
       const output = values.output ? expand(values.output) : null;
-      const handoff = output ? reserveTaskFile(output, localUrl(config), config.path) : null;
+      const managed = values['output-dir'] ? reserveTaskDirectory(expand(values['output-dir']), localUrl(config), config.path) : null;
+      const handoff = managed ?? (output ? reserveTaskFile(output, localUrl(config), config.path) : null);
+      let saved = false;
       try {
         const result = await local(config, `/v1/muse/tasks?${new URLSearchParams({ limit, lease: `${lease}ms`, wait: `${wait}ms` })}`, { timeout: wait + 5000 });
         if (result) {
-          try { handoff?.save(result); }
+          try { handoff?.save(result); saved = true; }
           catch {
             // Preserve the received claim in stdout if durable storage fails;
             // the original worker must retain it and report the failure.
             print({ ...result, handoff_saved: false });
             fail('task_handoff_write_failed', 'Claim received but could not be saved; retain stdout privately before continuing.', 500);
           }
-          print({ ...result, ...(output ? { handoff_file: output } : {}) });
+          const discarded = managed?.discardEmpty() ?? false;
+          print({ ...result, ...(managed ? { handoff_file: discarded ? null : managed.path } : output ? { handoff_file: output } : {}) });
         }
-      } finally { handoff?.close(); }
+      } finally {
+        if (managed && !saved) console.error(JSON.stringify({ error: 'claim_handoff_retained', handoff_file: managed.path }));
+        handoff?.close();
+      }
       return;
     }
     if (action === 'reply') {

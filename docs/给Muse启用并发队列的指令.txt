@@ -1,4 +1,4 @@
-本文件用于 Muse Link v0.4.0-rc.6 的后台工具资源控制，以及缺少原生并行时的单模型保底。当前 Muse 环境已反馈能派发并行任务，优先执行 docs/给Muse启用原生并行任务的指令.txt：一个轻量调度者加多个独立执行者。下面的4个工具名额不是Muse任务数量上限；不能只改后台脚本就声称已实现Muse任务并行。先读 docs/BURST_MESSAGES.md、docs/MUSE.md、docs/PRODUCTION.md。不要重跑内存压力测试，不上传本地内存工具、报告或凭据。
+本文件介绍Muse Link v0.4.0-rc.6起的后台工具资源控制。当前用户已明确选择原生并行，必须先执行docs/给Muse启用原生并行任务的指令.txt：一个轻量主级调度者加多个独立执行者，谁完成谁先回复。下面4个工具名额不是Muse任务上限，工具脚本后台化也不能代替原生模型任务。旧单模型循环只保留为历史参考，不能自动作为保底重新启用。先读docs/BURST_MESSAGES.md、docs/MUSE.md、docs/PRODUCTION.md。不重跑内存压力测试，不上传本地内存工具、报告或凭据。
 
 升级前暂停新任务调度，完成当前工具或核对其进程和外部结果，保存原领取文件/步骤/job/结果/回执的私密交接。依照 docs/给Muse升级的指令.txt 升级服务与配套 helper/hook，保留微信登录、配置、SQLite、原 job ID 和记录，不清租约、不删锁、不批量 ack。旧 supervisor 继续使用旧策略，需完成并核对后再启用新调度。status.version 必须是 0.4.0-rc.6；本地版本号不能代替运行中 daemon 版本。
 
@@ -11,11 +11,11 @@ node "$JOB_HELPER" status --dir "$JOBS"
 
 确认 limits 为 4/4/1/64。配置保存在该 job 根目录的私密 .scheduler.json，不放桥 config.json。全局 4 表示运行中的网络与计算合计最多 4，不是 4+1；网络等待归 io，本地计算归 cpu，混合/不确定归 cpu。分类不限制真实 CPU 使用，脚本不另起脱离监督进程组的守护进程。两核机先采用这一档，不直接开 10 个密集计算进程；更高网络并发待真实连续消息验收后再调整。
 
-把以下流程写入并实际执行于原生 hook 的 worker 指令，只替换 daemon 不会生效：
+当前多个原生执行者只使用本页工具命令管理各自脚本，均不得next；领取归唯一主级调度者，按NATIVE_PARALLEL.md执行。以下旧单模型循环仅供维护旧部署参考，不得直接写入当前hook或当作并行调度协议。只替换daemon不会自动更新Muse指令：
 
 1. 每轮先检查全部未完成事件，按原协议每 5 分钟正常 renew 到 30 分钟并保存返回的 lease_until。只有 renew 成功，才对对应 queued job 执行 refresh --id '<原稳定job>' --start-before '<新lease_until减60秒的UTC ISO时间>'。后台目录不保存 token，监督器不能自行验证/续租事件；续租失败停止新操作、取消尚在队列中的工具，核对已经执行的外部动作，不抢租约、不换 ID。
 2. node "$JOB_HELPER" dispatch --dir "$JOBS"；检查 list 的未结清终态与原 request 回执，核对实际产物后完成原 checkpoint，再用原事件有效 token 最终 reply。媒体用 --async，submitted/pending 立即回到循环，accepted 才 settle；不因短消息持续进来而饿死完成结果。
-3. 继续 muse next --limit 1 --lease 30m --output '<新的私密claim目录>/task.json'。有后台任务/异步发送时 --wait 1s，全空闲时才长等待或交给 hook。一次取一条不妨碍后台多个工具并发。短文字直接处理和回复，长任务先 progress，私密保存事件、稳定步骤、job ID、脚本、结果和原完成 request_id，不提前 ack。
+3. 继续 muse next --limit 1 --lease 30m --output '<新的私密claim目录>/task.json'。有后台任务/异步发送时 --wait 1s，全空闲时才长等待或交给 hook。一次取一条不妨碍后台多个工具并发。短文字直接处理和回复，私密保存事件、稳定步骤、job ID、脚本、结果和原完成 request_id，不提前 ack。微信只发纯文本真实结果、无Markdown，不发占位确认；长任务仅有实质阶段结果或已核实失败/阻塞才用稳定ID发progress，控制频率。
 4. 原本需要 checkpoint 的操作仍先 started。在权限范围内准备独立可信 .mjs 脚本，排队/运行期间不得改写；不将微信正文拼接为可执行命令，不将 API key 放参数或日志。用 enqueue --dir "$JOBS" --id '<稳定编号>' --kind io --script '/实际私密脚本.mjs' --timeout 120s --start-before '<当前lease_until减60秒的UTC ISO时间>'。计算任务改 --kind cpu。启动截止必须在未来一小时内，不能只按本机当前时间任意延长。enqueue 返回后不等待工具退出，立即继续下一轮。
 5. queued、starting、running 都未完成，不确认事件。完成一个工具后监督器自动补位；每轮 dispatch 补偿中断/策略变更。队列超过 64 或全部记录达到 256 时，保留原交接和同一 job ID，说明排队原因，稍后核对重试。相同 ID 重复 enqueue 只读缓存，不重跑、不续期。取消/过期不会复活；未执行的 started 步骤仍须核对后按 reviewed 流程结清，不自动伪造成功。
 6. 独立任务谁完成谁回复，长任务指出对应原请求。涉及追问、改指令、取消和同一资源修改时按上下文/依赖协调，不盲目并发。不要新建多个 worker 共用同一领取文件；hook 检测是只读，不能在检测阶段 dispatch/领取。调整额外的 90 秒去重，保持新消息、可运行队列和完成结果能唤醒原循环。先 dry_run 再 enable 并确认真实间隔。

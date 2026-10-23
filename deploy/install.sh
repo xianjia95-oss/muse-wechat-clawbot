@@ -72,11 +72,29 @@ if [ -f "$unit" ] && ! cmp -s "$work/muse-link.service" "$unit"; then
 fi
 as_root install -m 0644 "$work/muse-link.service" "$unit"
 hook="$HOME/hooks/scripts/muse-link-wechat.sh"
-if [ -f "$hook" ] && ! cmp -s "$SOURCE/deploy/wechat-hook.sh" "$hook"; then
+replace_hook=1
+if [ -e "$hook" ] || [ -L "$hook" ]; then
+    [ -f "$hook" ] && [ ! -L "$hook" ] || die 'Hook must be a regular file, not a symbolic link.'
+    # Only an unchanged detector from the prior managed release is replaceable.
+    # A platform wrapper may contain HATCH_HOOK_RESULT adaptation; preserving it
+    # is required for wake delivery. Never guess its format from a substring.
+    if ! cmp -s "$SOURCE/deploy/wechat-hook.sh" "$hook" &&
+       { [ -z "${previous:-}" ] || ! cmp -s "$previous/deploy/wechat-hook.sh" "$hook"; }; then
+        replace_hook=0
+    fi
+fi
+if [ -f "$hook" ] && [ "$replace_hook" -eq 1 ] && ! cmp -s "$SOURCE/deploy/wechat-hook.sh" "$hook"; then
     hook_backup="$hook.bak.$(date -u +%Y%m%dT%H%M%S).$$"
     cp -p "$hook" "$hook_backup"
 fi
-install -m 0700 "$SOURCE/deploy/wechat-hook.sh" "$hook"
+if [ "$replace_hook" -eq 1 ]; then
+    install -m 0700 "$SOURCE/deploy/wechat-hook.sh" "$hook"
+else
+    printf 'Preserved custom platform hook. Merge the new detector and dry_run its one-result output before enabling.\n'
+fi
+# Snapshot the actual adapter for inspection/rollback, separately from the
+# versioned detector template used to recognize managed files on later upgrades.
+cp -p "$hook" "$stage/hook.sh"
 if [ -L "$TARGET/current" ]; then
     previous="$(readlink -f "$TARGET/current")"
     [[ "$previous" == "$TARGET/releases/"* ]] || die 'Current release is outside managed releases.'
