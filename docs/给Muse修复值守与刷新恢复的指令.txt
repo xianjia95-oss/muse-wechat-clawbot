@@ -13,6 +13,8 @@
 
 现场细节仅保存在私密记录。落实docs/EXTERNAL_API_TASKS.md：调度者不连接API或等待重试；独立执行者记录次数与整段截止。建议初始连接5秒，只读诊断每次20秒、最多额外重试1次、总45秒；生图默认只提交一次、整段初始120秒，确需延长须执行前记录有界预算，不能失败后不断延期。监督器timeout约束整段脚本，不只单次HTTP；换班/换工具不重置预算。认证/参数错误不自动重试；生成超时且远端效果未知不重复提交。到边界后如实反馈已核实失败或结果未确认、已停重试，保留步骤核对，继续派发其他消息。这是Muse执行约定，桥无法拦截绕过helper的直接工具调用；须真实接入并验收。
 
+后续已确认另一类阻塞是Muse原生域名授权，且平台仅暂停申请任务，其他任务能继续。按docs/给Muse修复域名授权阻塞的指令.txt执行：受控外部访问留在事件执行者，主调度者不等授权；私密台账记录waiting_for_authorization，按现有协议用原交接正常续租、稳定progress说明真实阻塞，不提前ack。该状态不是新CLI或checkpoint phase，不自动批准或扩大白名单。ready>0且leased=0、没有运行中处理者说明仍需实际领取派发，不能用“等授权”笼统解释所有未回复。
+
 把hook实际投递目标修到具备主级权限的主代理会话，保留HATCH_HOOK_RESULT单结果适配，记录invocation到真实投递/turn/next的关联。探针只读health/diagnose，不领取、不创建/清理claim。rc.7安装/回滚保留自定义hook，因此仍需把新检测器显式合并到平台wrapper并dry_run；外层已适配则内部plain，不双重包装。告警读取具体代码、UTC检测时间和 ~/.cache/muse-link/hook-alert-state.json；每次收到wake先复查当前status/health，必要时diagnose。旧告警已过时且当前健康无待办时静默结束，不按旧内容重启或重复告警，不能把所有503都叫误报或微信故障。ready=0而leased>0的停滞看worker_lease_stalled，不是worker_claim_gap。
 
 上述“不领取”仅限检测脚本/诊断探针，不能写进wake后唯一的主级处理入口。主级收到wake且当前有ready时必须next→私密交接→真实spawn→继续next；healthy不等于无任务。若先运行的只是只读子任务，还须有实际后续主级运行入口。surface=main和dry_run不足以证明这一步已发生，保留同一次自动运行的工具记录。旧值守已经结束时先在当前主级运行核对台账并接管实际ready，再验证新微信消息自动触发；人工接管不计自动通过。
