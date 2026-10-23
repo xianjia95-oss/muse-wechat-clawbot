@@ -109,6 +109,64 @@ test('three resident consumers keep polling across bursts while one task is bloc
   }
 });
 
+test('six resident consumers hold six of ten tasks and refill as soon as any slot completes', { timeout: 15000 }, async (t) => {
+  const { bridge, store, calls, add, api, reply } = await setup(t);
+  const poolSize = 6, gates = Array.from({ length: poolSize }, deferred);
+  const full = deferred(), refilled = deferred(), owners = new Map(), tokens = new Set();
+  const histories = Array.from({ length: poolSize }, () => []);
+  let stopping = false, completed = 0, watchdog;
+  const worker = async (slot) => {
+    while (!stopping) {
+      const response = await api('/v1/muse/tasks?limit=1&lease=30m&wait=1s');
+      assert.equal(response.status, 200);
+      for (const task of response.tasks) {
+        assert.equal(owners.has(task.event_id), false);
+        assert.equal(tokens.has(task.lease_token), false);
+        owners.set(task.event_id, slot); tokens.add(task.lease_token);
+        histories[slot].push(task);
+        if (owners.size === poolSize) full.resolve();
+        if (histories[slot].length === 1) await gates[slot].promise;
+        assert.equal((await reply(task)).state, 'accepted');
+        if (++completed === 5) refilled.resolve();
+      }
+    }
+  };
+  const running = histories.map((_, slot) => worker(slot));
+  const failure = Promise.all(running).then(() => { throw new Error('resident pool unexpectedly exited'); });
+  const deadline = new Promise((_, reject) => { watchdog = setTimeout(() => reject(new Error('six-slot pool made no progress')), 8000); });
+  try {
+    while (bridge.worker.claim_requests < poolSize) {
+      await Promise.race([new Promise((resolve) => setTimeout(resolve, 5)), failure, deadline]);
+    }
+    for (let i = 0; i < 10; i++) add(`six-slot-${i}`);
+    await Promise.race([full.promise, failure, deadline]);
+    assert.ok(histories.every((tasks) => tasks.length === 1));
+    assert.equal(store.queueStats().leased, 6);
+    assert.equal(store.queueStats().ready, 4);
+    assert.equal(calls.length, 0);
+    // Release just one slot; it must serve the remaining four without waiting
+    // for the other five first-wave tasks to finish. No new consumer is spawned.
+    gates[2].resolve();
+    await Promise.race([refilled.promise, failure, deadline]);
+    assert.equal(histories[2].length, 5);
+    assert.equal(owners.size, 10); assert.equal(tokens.size, 10);
+    assert.equal(calls.length, 5); assert.equal(store.queueStats().ready, 0);
+    assert.equal(store.queueStats().leased, 5);
+    for (const [slot, tasks] of histories.entries()) if (slot !== 2) {
+      assert.equal(tasks.length, 1);
+      assert.equal(store.event(tasks[0].event_id).acked_ms, null);
+    }
+    stopping = true; gates.forEach((gate) => gate.resolve());
+    await Promise.all(running);
+    assert.equal(completed, 10); assert.equal(calls.length, 10);
+    assert.equal(store.queueStats().pending, 0);
+  } finally {
+    clearTimeout(watchdog); stopping = true;
+    gates.forEach((gate) => gate.resolve());
+    await Promise.allSettled(running);
+  }
+});
+
 test('parallel task tokens cannot reply, renew, checkpoint or ack another event', async (t) => {
   const { store, calls, add, claim, api, reply } = await setup(t);
   add('owner-a'); add('owner-b'); const [a, b] = await Promise.all([claim(), claim()]);
