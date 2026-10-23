@@ -1,20 +1,13 @@
-请在你（Meta Muse）自己的云端部署 Muse Link v0.4.0-rc.5，把你对接我的微信ClawBot。本版为单账号、单实例生产加固候选版，仍须真实验收。
+项目：https://github.com/xianjia95-oss/muse-wechat-clawbot
 
-先读README.md、docs/MUSE.md、docs/PRODUCTION.md。已有Muse Link按docs/给Muse升级的指令.txt操作，保留配置/账号/状态。新安装确认Node.js24+、systemd、持久化本地磁盘、网络代理和真实Muse hooks权限，以Muse HOME属主执行bash deploy/install.sh，不sudo整个安装器，不运行两套微信接收进程。
+请由 Meta Muse 主代理读取同一提交的 docs/给Muse一键部署的指令.txt 和 docs/QUICKSTART.md，完整执行首次安装、扫码、启动微信桥、创建或补齐6个真实常驻worker、微信实际验收。
 
-接入流程和协议细节见docs/REFERENCE.md。需要扫码时按MUSE.md运行独立login，立即展示每条新qr的原图，写明编号和客户端刷新时间；verification_required时按实际手机数字和最新code_file从stdin提交，不放进参数或日志。submitted不等于登录成功，等logged_in=true后再启动服务。微信账号是否支持ClawBot由实际情况决定。
+首次安装可使用 deploy/bootstrap.sh；已有安装保留健康服务、账号、SQLite、原始交接和事件所有者，先 status/health/diagnose，不重复安装或为新文档擅自升级。升级另按 docs/MUSE.md 和 docs/PRODUCTION.md。
 
-启动后status.version须为0.4.0-rc.5、health至少一次轮询成功。用真实Muse原生hooks注册，采用docs/MUSE.md完整worker指令，记录实际标识/状态/检测间隔，先dry_run再启用，dry_run不领取任务。必须有常驻连接进程和具备工具权限的真实Muse worker，不能只安装接收服务或假称hook注册成功。
+后台扫码开始后立即读取脚本打印的私密 setup.log，展示当前 event=qr 原始 PNG；配对数字按最新 code_file 从 stdin 提交，submitted 不等于 logged_in。登录成功后才启动服务，桥健康后仍需执行 docs/给Muse恢复常驻worker的指令.txt，不能只安装桥就报告完成。
 
-任务领取后保存event_id、lease_token、lease_until，检查execution和completion。每次回复/ack/renew/checkpoint带当前token，长任务续租，外部工具前后记录稳定步骤；遗留started先核对，completed cached复用结果，不重复执行。结果准备好立即muse reply回微信，不等下一轮hook。生成文件先完整导出到允许的持久化media_roots，再在同一最终回复加--image/--video；支持图片20MiB、视频50MiB，最多4个，不转码。最终成功自动ack，进度用稳定reply-id。入站附件下载和普通文件未实现，不能声称已读取。
+worker 各自持续 next/reply/renew/checkpoint，独立任务谁先完成谁回复，不逐条等主代理或hook。6个槽全忙时仍排队，任一空闲立即补位。保留原子领取、完整token、私密交接、稳定request与外部操作防重，started/unknown先核对；本地CPU工具名额仍为1。
 
-unknown/rejected先核对，不换ID重发；failed可安全续传时使用原文字和路径，不能重做整项生成。恢复备份默认暂停，需要核对外部结果后批准。完整限流、保留期限、监控和备份回滚以PRODUCTION.md为准。
+最后主聊天无人操作，由用户只从微信验收问候、真实工具、连续10条和长任务隔离。按 docs/ACCEPTANCE_CHECKLIST.md 记录通过/失败/未执行；accepted不等于手机已收到。刷新后自动恢复须另验，不编造永久在线保证。
 
-最后按docs/给Muse生产验收的指令.txt执行真实手机、工具、故障恢复、备份/回滚及实际72小时观测，交付逐项通过/失败/未执行记录。接口accepted或本地模拟不能代替手机收取/播放，不能承诺固定网络速度；不要公开token、验证码、session或私密备份。
-
-连续消息与长工具须同时按 docs/BURST_MESSAGES.md 更新实际 worker/hook，使用私密后台工具结果和真实队列排空循环，核实取消额外的 90 秒消息去重；不能只升级后台。验收增加“110 秒后台无副作用等待期间连续 5 条短消息均收到回复”，逐条保存提交/accepted/手机时间。
-
-rc.5 媒体 reply 加 --async，先保存原正文/路径/稳定 request_id，收到 pending 后继续接待短消息，每轮查原回执并续租；全部 accepted 后自动 ack，再结清工具通知。unknown/rejected 不重发。工具监督器意外消失时按 BURST_MESSAGES.md 做 reviewed reconcile，活跃进程组会拒绝，interrupted 不表示业务成功；不删除原 ID 或锁。
-
-
-当前值守模式以docs/给Muse恢复常驻worker的指令.txt和docs/NATIVE_PARALLEL.md为准：主代理启动多个真实原生常驻worker，它们各自直接next/reply并持续消费，不再逐条等待hook。新池确认工作后再结束旧职责，rc.5健康桥可直接调整；全池忙仍排队，刷新自动恢复须另验。未经用户验证不推送或发布。
+不公开配置、凭据、二维码、数据库、消息正文、任务handle或现场日志，不上传本地调试材料，不推送或发布。不要因为部署而访问用户其他API、生图或进行压力测试。

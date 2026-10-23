@@ -1,0 +1,34 @@
+请由 Meta Muse 主代理在你自己的 Linux 云端执行，把 Muse 接入我的微信 ClawBot。
+项目：https://github.com/xianjia95-oss/muse-wechat-clawbot
+教程：https://github.com/xianjia95-oss/muse-wechat-clawbot/blob/main/docs/QUICKSTART.md
+
+一、先核对，不能重复安装
+读取同一提交的 README.md、docs/QUICKSTART.md、docs/MUSE.md、docs/给Muse恢复常驻worker的指令.txt。
+确认微信可用ClawBot，云端有Node.js24+、npm、运行中的系统systemd、持久化本地磁盘、服务权限和创建/查询真实原生任务的能力。缺项如实处理，不谎称完成。
+已有安装时只读核对版本、status/health/diagnose、真实任务和私密交接。保留健康桥、登录、SQLite和原事件所有者，仅补齐缺失worker；不为新教程升级、重启、重新扫码或清库。升级另按MUSE.md交接和备份。
+
+二、首次安装用一键入口
+以Muse HOME属主身份执行，不sudo整个脚本。确认没有已有安装后运行：
+
+setup_file="$(mktemp)" &&
+curl -fsSL --connect-timeout 10 --max-time 60 \
+  https://raw.githubusercontent.com/xianjia95-oss/muse-wechat-clawbot/main/deploy/bootstrap.sh \
+  -o "$setup_file" && bash "$setup_file"
+
+脚本解析main的完整commit，下载该提交并安装锁定依赖；默认是候选源码，不等于Releases发布或生产验收。记录source commit，使用已安装提交配套文档，不混用旧包。失败保留脱敏退出码/原因，不删除状态绕过预检。
+
+三、立即扫码，不等登录结束
+脚本后台启动登录并打印本次attempt目录的setup.log/state.json。立即读日志；event=qr时确认真实文件和进程，展示file指向的原始PNG、编号和客户端刷新时间，新qr立即替换旧图。不要只报路径或等10分钟超时后才读。
+verification_required时请我提供手机实际配对数字，保留前导零，按MUSE.md从stdin提交至最新完整code_file，不写进参数、公开日志或仓库。submitted不等于登录成功，须等原流程logged_in=true。
+后台仅在登录成功后请求启动systemd并检查readiness。核对stage=bridge_ready、status.logged_in=true、poll.last_ok_at非空和当前health；失败查私密日志和journal，不盲目重扫。已有在线服务不会被此流程重启。
+
+四、补齐6个真实常驻worker
+桥健康后完整执行安装目录current/docs/给Muse恢复常驻worker的指令.txt，核对NATIVE_PARALLEL.md、RUNTIME_RECOVERY.md。你使用真实平台工具创建/查询/补位，不只口头承诺。已有健康者保留，只补齐到6个不同真实handle；每个附完整常驻协议，直接循环next/reply/renew/checkpoint，不用shell/Node进程冒充原生Muse任务。
+空队列继续等，完成一条继续领，不逐条等hook或主代理。--limit 1不变，独立任务谁完成谁回，全槽忙仍排队。独占私密交接、完整token、稳定request；不取数据库token，不重做started/unknown工具或发送。6个worker不是6个CPU工具进程，本地CPU工具活动名额仍1；资源与平台额度须云端实测。
+按真实平台工具注册只读hook，单结果适配，dry_run后启用；hook不next、不清claim，作为检测/告警/恢复提示，不作为每条消息必经入口。刷新自动恢复入口须另测，无入口明确未接入。
+
+五、请我只从微信验收
+建池后主聊天无人操作：问候、真实shell回UTC/Node版本、一分钟10条不同编号、90秒无副作用等待期间其他短消息先回。核对缺失/重复/错配，记录领取/提交/accepted/手机时间；人工救援即相应自动链路失败。
+安装成功、healthy、wake、running或腾讯accepted都不能单独证明手机收到回复。
+
+只交脱敏总结：提交和后台版本、桥健康、实际池大小、hook结果、微信验收通过/失败/未执行、刷新恢复边界。真实handle和逐事件资料仅私密留存，不公开token、凭据、二维码、正文或调试日志；不推送或发布，不测试用户未要求的API、生图或压力负载。

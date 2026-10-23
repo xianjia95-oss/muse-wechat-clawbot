@@ -49,3 +49,5 @@ jobs:
         run: docker run --rm -v "$PWD:/work" -w /work node:24-bookworm-slim npm ci --no-fund
       - name: Exercise install, failure, backup, upgrade and rollback
         run: docker run --rm -v "$PWD:/work:ro" -w /work node:24-bookworm-slim bash test/install-smoke.sh
+      - name: Exercise first-time bootstrap and QR activation offline
+        run: docker run --rm --network none -v "$PWD:/work:ro" -w /work node:24-bookworm-slim bash test/bootstrap-smoke.sh

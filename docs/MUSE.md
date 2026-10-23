@@ -1,5 +1,7 @@
 # 在 Meta Muse 云端部署
 
+首次使用请先看 [新手教程与一键安装](QUICKSTART.md)，或把 [完整部署指令](给Muse一键部署的指令.txt) 交给 Muse 主代理。下文用于手动安装、升级和协议核对。
+
 独立程序 Muse Link v0.4.0-rc.7，将 Meta Muse 对接微信 ClawBot。需要 Muse 自己的 Linux、Node.js 24+ / npm、运行中的 systemd、服务安装权限和 Muse hooks。文字与图片/视频回传的实际账号收取仍待验证。Muse 使用自身的任务能力处理消息，本项目不调用或替换其模型。
 
 先请用户在微信“我 → 设置 → 插件”确认并启用 ClawBot。部署使用 Muse 自己的云端，不要求额外公网 IP；云实例必须能持续运行桥、访问腾讯 HTTPS 接口并注册平台原生 hooks。
