@@ -1,0 +1,10 @@
+请只读排查当前 rc.5 微信无回复问题，先保留证据，不重启健康桥、不清库/租约、不换 request_id 重发、不重跑外部任务、不创建第二个消费者。
+
+1. 用已核验安装目录或补充包的真实绝对 deploy/patrol.sh --check，传实际 --config、--job-dir，取得免桥数据库锁的 status/health/工具快照；保存 UTC、退出码、实际 version/build、恢复助手修订。裸命令或猜测路径产生的 exit 127、state_locked 是入口缺项，不以 inbox=0 证明桥可达。桥不可达时队列数为未知，不按零积压处理。
+2. 先对照 docs/RUNTIME_RECOVERY.md 的私密巡检状态和恢复 last_attempt，不重复多轮同样检查。服务单元、boot、桥 since 的变化只作证据；缺平台直接记录时不归因为环境刷新。若恢复正在进行，等待原入口的有界结果，不在锁外启动。已有恢复授权仍沿用，本条核查不扩大授权。
+3. 由原主聊天原生查询台账完整 handle；独立巡检 direct 空列表不能证明原任务结束，队列空或领取新鲜也不能证明原生存活。running/starting/等待授权保留；unknown 或创建回执不明不补位。不要为排查主动终止任务。
+4. 消息已领取时，用同源码 scripts/diagnose.mjs --config '<实际配置>' --event-id '<原事件ID>' 只读核对，再用 scripts/queue-report.mjs 查看逐条入库/提交/accepted 阶段。敏感标识只私密保存；回传相对标签、错误码和时间。没有领取/工具开始记录就写未记录；accepted 只说明接口接受，不代表手机显示。
+5. 若执行者报 stale_lease，保留真实 reply 退出码和桥 error/lease_reason；从原领取文件取完整 token，通过正常 renew 或诊断的私密 stdin 校验，不从数据库抄 token，不截断、不清有效租约。没有原始失败记录就记未证实，不能把文字报告当根因。
+6. 长工具核对其后台 job、step 和原事件映射；已开始的未知副作用先核实，不自动重做。按 BURST_MESSAGES.md 后台启动后继续 next，未回认的新规则标待生效；授权等待不自动重试或绕过。发送 unknown/rejected 不换 ID 重发。
+
+若需改运行规则或升级，先给出具体变更及依据，按 docs/给Muse升级的指令.txt 对账交接；不为凑验收重跑业务。核查结束只合并回传一次结果和缺项，健康完成回调保持静默，日志、正文、账号、token、完整任务标识和私密路径不发微信或仓库。

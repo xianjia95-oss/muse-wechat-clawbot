@@ -1,0 +1,38 @@
+{
+  "format": 1,
+  "date": "2026-10-28",
+  "versions": [
+    {
+      "id": "v0.3.0",
+      "version": "0.3.0",
+      "mode": "原版常驻 worker",
+      "source": "versions/v0.3.0",
+      "archive": "packages/muse-link-v0.3.0.zip",
+      "archive_root": "muse-link/",
+      "sha256": "b8fa77de55a13e7b064bba014d9c6c20de1b2026f1dd4e1c813e85a56aa116f4",
+      "file_count": 31
+    },
+    {
+      "id": "v0.4.0-rc.5",
+      "version": "0.4.0-rc.5",
+      "mode": "rc.5 入站多媒体增强",
+      "source": "versions/v0.4.0-rc.5",
+      "archive": "packages/muse-link-v0.4.0-rc.5-clean-install.zip",
+      "archive_root": "",
+      "sha256": "14106ab3327f3adc6bffbb318f78e60f14034f7513616b3371e6b9919fc2874c",
+      "file_count": 66,
+      "build": "rc5-inbound-media-20261028",
+      "recovery_revision": "rc5-recovery-20261029-patrol1"
+    },
+    {
+      "id": "v0.4.0-rc.7-owner",
+      "version": "0.4.0-rc.7",
+      "mode": "一个负责人＋两个原生草稿执行者",
+      "source": "versions/v0.4.0-rc.7-owner",
+      "archive": "packages/muse-link-v0.4.0-rc.7-owner.zip",
+      "archive_root": "muse-link/",
+      "sha256": "8a593390de89d477c7cff6b065bc03df967aaa8b8238ac16c5f23236b09c1875",
+      "file_count": 94
+    }
+  ]
+}

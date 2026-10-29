@@ -1,0 +1,15 @@
+{
+  "bridge_config": "/home/muse/.config/muse-link/config.json",
+  "session_file": "/home/muse/.local/state/muse-link-conversation/session.json",
+  "claims_dir": "/home/muse/.local/state/muse-link-conversation/claims",
+  "state_dir": "/home/muse/.local/state/muse-link-owner-watchdog",
+  "slot": "wechat-conversation-owner",
+  "adapter_script": null,
+  "recovery_enabled": false,
+  "interval_ms": 15000,
+  "failure_threshold": 3,
+  "adapter_timeout_ms": 10000,
+  "retry_base_ms": 30000,
+  "recovery_window_ms": 900000,
+  "max_recoveries": 3
+}

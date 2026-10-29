@@ -1,0 +1,81 @@
+# 微信很久不回复的排查
+
+health 通过和最近 29 条 accepted 之类的历史指标，不能证明当前事件已提交回复。先区分微信接收、Muse 唤醒/领取、模型/工具处理、回复提交和腾讯确认。不要先删库、清租约、换 request_id 或关闭租约校验。
+
+连续消息被耗时工具挡住时，按 [连续消息流程](BURST_MESSAGES.md) 读取逐条回执，并同时调整实际 worker/hook。rc.4 修复 accepted 恢复项误报空队列，另提供不阻塞模型消息循环的 Linux 后台工具和结果唤醒；仅升级服务无法自动改变同步等待外部 API 的任务指令。
+
+rc.5 的媒体 reply 使用 `--async`：先保存正文/媒体路径/稳定 request_id，再提交，返回 pending 后继续处理短消息，逐轮查 request，accepted 才结清工具通知。桥将上传与实际 chat 提交分开；不同任务可交错到达，每项内部顺序保持。unknown 不盲目重发。
+
+health 的 worker_lease_stalled 表示有效租约超过 worker_stale_ms（默认 10 分钟）没有领取/续租/checkpoint 活动；先核实原 worker 和工具，不能据此清租约。后台 job 若 attention_required 且无法正常 cancel/settle，按 BURST_MESSAGES.md 核对远端结果和原进程组，再显式 reconcile --reviewed --text -；仍有活跃进程会拒绝，interrupted 只表示本地监督结束，不表示业务完成。
+
+## 只收到占位话术
+
+先核对实际服务的配置、state_dir 和后台版本。在该库用 museRequestId(event_id) 查固定最终 sends.id，再以 send_events.request_id 关联 event_id，不能按相近时间配对。最终 accepted 且事件已 ack 表示协议已结束，不是仍在队列等待；这不证明提交了实际答案。send_events 的列名是 request_id、event_id。
+
+旧版本发送库不存正文；本地候选新增[私密回复历史](REPLY_HISTORY.md)，可用当前查询事件的有效原租约读取其他worker为同一发送者保存的提交内容、模式与状态。旧记录未保存/过期不能回填。没有数据库正文时，仍只能在部署环境私密读取原 claim/worker 工具调用，并用精确载荷及实际收件人按已安装 bridge.mjs 的算法核对指纹；不向公开日志或仓库输出正文、账号、token 或指纹。候选指纹不匹配不能确定实际发送内容，也不证明存在空格差异；原记录未留则记无法检查，不猜测。请不要重跑已 ack 的业务或改库补发。
+
+本地候选的 placeholder_final_reply（HTTP 422）会拒绝已知整条纯占位的新 final，未创建发送记录、未 ack。保留原领取与错误证据，原 worker 完成真实工作后提交原最终 ID；不靠显式 ack 或更换模式绕过。历史 accepted、unknown 及指纹冲突按原规则核对，升级不会重新打开已结束事件。该检查不是通用内容审核，其他措辞仍须逐条验收业务答案。
+
+连发测试还应私密记录每个常驻 handle 在完成首条后继续 next 的历史，以及剩余消息由哪个空闲者接续处理。仅凭全部 accepted 或无积压，无法证明池在持续消费或用户拿到真实答案。
+
+## 现有 rc.2 可直接采集
+
+下载新源码到独立目录，不运行安装器，也不停止现有服务。Node.js 24 可直接运行这个只读脚本，无需 npm ci：
+
+```bash
+node scripts/diagnose.mjs
+# 自定义配置须与实际 worker 一致：
+node scripts/diagnose.mjs --config /private/config.json --event-id '<原事件ID>'
+```
+
+脚本只请求本机 status/health/metrics；指定 event-id 时还只读查询原 SQLite。它不领取、ack、续租、发送或重启，不输出配置凭据、消息正文或 token。rc.2 没有 worker 活动遥测，会明确显示 worker_telemetry_available=false，不虚构历史。
+
+要核对原提交 token，请在云端把**原 worker 保存的值**作为标准输入提供，而不是回传聊天或放在参数中：
+
+```bash
+node scripts/diagnose.mjs --config /private/config.json \
+  --event-id '<原事件ID>' --lease-token-stdin < '/private/captured-lease-token.txt'
+```
+
+文件只能有该 token 和可选末尾换行；不能从数据库抄当前 token 来冒充原 worker 的值。没有原记录时注明无法比较。supplied_token_check.lease_reason=null 表示检查时该 token 与当前数据库吻合且有效，不能据此证明过去失败时也相同。记录 checked_at_ms、acknowledged_at_ms、lease_until_ms 和 client_endpoint；确认领取/回复/诊断使用同一配置、HOME、命令包装器和后台端口。不要公开 token 文件。
+
+## rc.3 的持续定位
+
+```bash
+muse-link diagnose
+journalctl -u muse-link -n 100 --no-pager
+```
+
+- queue.ready > 0：消息入库等待 worker；先查池中真实handle、忙闲、直接next及退出码；全池已停再查主级补位入口和hook投递，不是发送连接池在等长轮询。
+- queue.leased > 0：任务已领取而未确认；ready=0 不代表处理完成。检查原 worker 进度和 next_lease_expiry_ms，不能盲目释放正在执行工具的任务。
+- worker.last_reply_at 尚未出现：本次服务启动后未看到 muse reply，查 worker 是否先在主聊天结束、遗漏回传或提前 ack。API 被拒绝也会有 last_api_error，不能只看发送成功日志。
+- delivery.queued / uploading / sending：回复已进入桥，分别定位同收件人排队、媒体上传或腾讯 chat 请求；oldest_inflight_ms 是已提交工作的最长等待。accepted 不等于手机显示。
+- task_acknowledged 日志的 source 区分 explicit_ack、final_reply 和 accepted_recovery；用稳定 request_id 关联日志，不记录正文、token 或微信账号。
+
+## stale_lease 的具体含义
+
+先区分执行者的文字结论与真实拒绝：只有报告而无reply调用记录、退出码或错误JSON时，记“是否提交/拒绝原因未记录”。其他exec均返回0并不能证明该reply成功，也不能证明从未调用。成功接管时原token有效，只证明接管时原记录仍可用，不能倒推执行者当时实际传入了同一个完整值。
+
+本地待验证修订为worker_api_rejected日志及diagnose的worker.last_api_error增加task_request_id和request_id（后者仅可推导时存在），均为稳定散列，用于关联同事件及final/progress；不输出原event_id、token、正文。其他任务成功、同任务progress成功或较早开始请求的完成不会清掉对应final拒绝。last_api_error仍只保留当前进程最新一条，会被更新的拒绝覆盖，重启也会丢失；需要保留脱敏日志与失败命令退出码，不能把这个字段当完整故障记录。
+
+本地新CLI支持 [从原交接文件读取完整租约](MUSE.md#从原交接文件读取租约本地待验证修订)，减少手工截断。源码更新不会自动升级部署，不能直接给现有rc.5命令加参数。已有CLI应在受控本地代码里从原文件读取完整值，不打印或手工截短，更不能用当前数据库token替换原始值。
+
+| lease_reason | 核对及处理 |
+| --- | --- |
+| missing_token | 未带 token 或为空；使用此次领取保存的 token，不能从别的任务/全局变量复制。 |
+| token_mismatch | 提交值与当前事件记录不一致；查重复 worker、配置/后台错配和原始领取输出。普通 claim 不会覆盖尚未到期的租约，不能直接归因于重启。 |
+| lease_expired | 服务器判断已到期；记录 server_time 与 lease_until。确认旧 worker/外部工具状态后重新领取，复用原结果与稳定 ID，不重做生成或外部操作。 |
+| event_acknowledged | 事件已确认；查 acked_ms 与 ack 来源。不能在最终回复之前先 ack；不要为了补回消息直接改数据库。 |
+| event_not_found / invalid_event_id | 查 event_id、配置/端口和历史保留；不要认作“网络慢”。 |
+
+若领取后十几秒就被拒绝，而 lease_until 在 30 分钟后，仅凭旧版的 stale_lease 无法判断过期。需要失败时的具体 reason、服务端时间、ack 和配置证据。保留脱敏的原始错误 JSON、退出码和领取记录，不仅回传自然语言判断。后续其他任务成功不能排除某个事件的交接问题。
+
+若新班次说没有保存上一班的 token，原 token 与数据库是否相同就是未知，不能同时断言“没有拿错”。这能解释新班次为什么无法继续旧任务，不能证明首次提交为何被拒绝。将“首次拒绝原因待查”和“交接丢失，未到期任务暂不能重领”分别记录。rc.3 增加 `muse next --output /private/new-task.json` 的私密领取结果保存，完整流程见 [跨班次交接](MUSE.md#跨班次交接)。旧服务仍保持原租约保护，不通过读库强行接管。
+
+精确 v0.4.0-rc.2 源码的本地独立进程复现中，“先重启再领取回复”和“领取后重启再用原 token 回复”均成功；重启会重开 SQLite 和状态锁，mock 仅替代腾讯上游。它排除了这两条简单路径的必现故障，不能证明云端特定事件没有其他缺陷。服务重启早于领取，且没有失败时的 token 比对记录时，不能把原因写成“重启使租约残留”。
+
+## 已修的兼容陷阱
+
+v0.4 增加进程状态锁后，原 inbox pull/ack 曾在运行中误走离线数据库，返回 state_locked。rc.3 改为默认走后台 API，显式 --offline 仍拒绝活跃服务；租约 token 检查继续保留。旧 worker 还须使用当前 token，不能只升级接收后台。
+
+此前 Muse 默认一次可领取 20 条，单次 worker 如果仅处理一条，其余可能在默认 30 分钟内不再触发 ready 唤醒。rc.3 的 Muse adapter、HTTP/CLI 与 inbox pull CLI 默认只取一条，批量必须显式指定。已有租约不自动清空；长任务按约定续租。普通问候无需 checkpoint；会改变外部状态或不应重复的工具才记录 started/completed。

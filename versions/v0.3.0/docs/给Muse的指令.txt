@@ -1,0 +1,11 @@
+请部署独立微信桥 Muse Link v0.3.0，把你（Meta Muse）对接我的微信 ClawBot。本版增加生成图片和视频后回传微信，继续重点验证结果提交和发送耗时。
+
+先读 README.md、docs/MUSE.md、docs/MEDIA.md、docs/API.md。若已部署 Muse Link v0.2.x，请用 docs/给Muse升级的指令.txt，保留配置、登录和 SQLite，健康会话无需扫码。新部署时参考 https://upgpts.com/en/tutorials/muse/muse-wechat 和腾讯协议 https://github.com/tencent/openclaw-weixin/blob/HEAD/docs/protocol_zh_CN.md ，先确认我已启用 ClawBot，在你的 Linux 云端确认 Node.js 24+、systemd、权限和 hooks，再运行 deploy/install.sh。
+
+需要扫码时运行 muse-link login；每条新 qr 日志立即展示 file 原图并说明序号、id 和客户端刷新时间，微信可能提前判过期。verification_required 时请我提供手机显示的配对数字，保留前导零，再按最新 code_file 用 muse-link login verify --code-file '<路径>' --text - 从 stdin 提交；不得把验证码放进参数，submitted=true 不算登录成功。等 logged_in=true 后启动/重启服务，health 通过再注册建议 5 秒轮询的 hook，使用平台实际协议，记录真实生效间隔，先 dry_run 再 enable，完整采用 docs/MUSE.md 的唤醒指令。必须同时有常驻接收服务和具备工具权限的真实 Muse worker，只有接收进程不算完成。
+
+检查 muse-link status 的 version=0.3.0、capabilities.send 含 text/image/video；将生成工具实际输出目录合并进 config.media_roots，保留其他配置并重启服务。用 docs/MUSE.md 的完整唤醒指令更新原 hook，移除旧版“只能回文字”限制。用 muse-link muse next --lease 30m 领取 tasks；文字完成后立即 muse-link muse reply '<event_id>' --text -，正文用带引号 heredoc，不等另一轮流程转发。生成图片或视频时，先用真实 Muse 工具导出本地原文件，再在同一最终 reply 添加 --image '/绝对路径/result.png'、--video '/绝对路径/result.mp4'，最多 4 个媒体，图片 20 MiB、视频 50 MiB，本包不转码。只有 URL 或内部媒体 ID 时先导出文件。不能先发最终文字完成事件再补图。长任务先 --progress --reply-id started 回复确认；预览可用 --progress --reply-id preview。全部确认后才自动完成事件。
+
+unknown/rejected 或结果不明时先查 request 状态并在 Muse 聊天报告，不换新 ID 重发；failed 且 retryable=true 可核对原因后使用原文字和媒体路径续传，不重做生成任务、不重复已确认消息。alert 只在 Muse 聊天报告并 ack。入站图片/视频下载、普通文件和原始语音尚不支持，不能声称已经读取。
+
+请我在微信测试问候、真实 shell 获取 UTC 时间和 Node 版本、生成小图片与短 MP4 并回传。报告 hook 状态和间隔、版本、event_id、request_id、timing，核对手机是否收到、图片能否打开、视频能否播放。长轮询 35 秒是等待上限，不是回复固定延迟。本地模拟和 accepted 不能代替真实微信收取与播放验收，也不能据此承诺固定速度。

@@ -1,0 +1,35 @@
+{
+  "binding": "muse",
+  "state_dir": "~/.local/state/muse-link",
+  "listen": {
+    "host": "127.0.0.1",
+    "port": 18791
+  },
+  "api_token": "Run muse-link init to generate a private token",
+  "allow_wxids": [],
+  "send_timeout_ms": 12000,
+  "poll_timeout_ms": 45000,
+  "media_timeout_ms": 120000,
+  "inbound_media_timeout_ms": 30000,
+  "media_roots": [
+    "~/workspace"
+  ],
+  "require_lease_token": true,
+  "operations": {
+    "max_inflight_sends": 64,
+    "max_peer_sends": 16,
+    "max_pending_events": 2000,
+    "min_free_bytes": 134217728,
+    "max_state_bytes": 1073741824,
+    "max_outbox_bytes": 536870912,
+    "max_http_requests": 128,
+    "backlog_warn_ms": 300000,
+    "poll_stale_ms": 120000,
+    "worker_stale_ms": 600000,
+    "event_retention_days": 7,
+    "send_retention_days": 90,
+    "failed_media_retention_days": 7,
+    "maintenance_interval_ms": 3600000,
+    "shutdown_timeout_ms": 180000
+  }
+}

@@ -1,0 +1,13 @@
+项目：https://github.com/xianjia95-oss/muse-wechat-clawbot
+
+请由 Meta Muse 主代理读取同一提交的 docs/给Muse一键部署的指令.txt 和 docs/QUICKSTART.md，完整执行首次安装、扫码、启动微信桥、接入固定对话负责人和后台有限并行、微信实际验收。
+
+首次安装可使用 deploy/bootstrap.sh；已有安装保留健康服务、账号、SQLite、原始交接和事件所有者，先 status/health/diagnose，不重复安装或为新文档擅自升级。升级另按 docs/MUSE.md 和 docs/PRODUCTION.md。
+
+后台扫码开始后立即读取脚本打印的私密 setup.log，展示当前 event=qr 原始 PNG；配对数字按最新 code_file 从 stdin 提交，submitted 不等于 logged_in。登录成功后才启动服务，桥健康后仍需执行 docs/给Muse恢复常驻worker的指令.txt，不能只安装桥就报告完成。
+
+请完整执行docs/给Muse切换统一对话与后台任务的指令.txt及CONVERSATION_OWNER.md。新接口须安装本地配套候选，未推送改动不在旧main或Release中。一个真实常驻负责人持续直接next、读context、维护摘要并统一答复；后台活动最多2项、CPU最多1项，执行者只交结果。长工具不占住对话循环，原生生图/视频权限必须实证。先安全交接旧租约和工具，再session start，不清库、不抄token、不让六个消费者继续随机接同一聊天。
+
+最后主聊天无人操作，由用户只从微信验收问候、真实工具、连续10条和长任务隔离。按 docs/给Muse一键部署的指令.txt 记录通过/失败/未执行；accepted不等于手机已收到。刷新后自动恢复须另验，不编造永久在线保证。
+
+不公开配置、凭据、二维码、数据库、消息正文、任务handle或现场日志，不上传本地调试材料，不推送或发布。不要因为部署而访问用户其他API、生图或进行压力测试。

@@ -1,0 +1,11 @@
+请排查“桥健康、Muse 已领取但微信没回复”，先保留证据，不清库、不清租约、不关闭 require_lease_token、不换 request_id 重发。
+
+把新源码解压到独立目录，先不安装、不重启原 rc.2 服务。读 docs/TROUBLESHOOTING.md，用 Node 24 运行 node scripts/diagnose.mjs --config '<实际worker配置>' --event-id '<原事件ID>'。此脚本无需 npm ci，只读原 API 和 SQLite；不能领取、ack 或发送。
+
+回传 version、client_endpoint、queue、event、worker、endpoints 和 findings，不回传 token、验证码、消息正文。用原 worker 保存的 token 在云端通过 --lease-token-stdin 作本地比较，不能从数据库读取当前 token 再说“匹配”。没有原记录时注明。查 acked_ms 是否早于回复提交、lease_until 是否在未来，并核对 next/reply 是否同一个配置、HOME、命令包装器和后台端口。保留脱敏原始错误 JSON、命令退出码和实际时间，不只回传总结。单凭重启时间不能推断租约残留；旧 stale_lease 同时包括缺 token、错 token、过期和已 ack。
+
+若需装 rc.3，先持久化交接原任务、暂停 hook、停止服务，按升级说明备份安装并同步 worker。不要为了测试改写原任务或重做外部工具。rc.3 日志新增 worker_api_rejected 的 lease_reason/server_time/lease_until/acked_ms，task_acknowledged 的 source，以及接收/领取记录。先用一条新的无副作用短消息复现，保存完整领取输出和实际回复命令，仅在本地保存 token；回传脱敏 reason、时间、ack 来源及是否发起腾讯请求。若 token 真正未到期且当前一致却被拒绝，保留失败当时记录，不能编造“网络慢”或“租约残留”。
+
+按 docs/MUSE.md“跨班次交接”，每次 muse next --limit 1 --lease 30m --output '<新建私密目录>/task.json'，保存原始领取结果到云端私密文件，并持久化交接目录位置、实际工具进度和生成文件。新班次先确认旧 worker/后台工具已停止，再读原文件并经正常 renew 校验后恢复；不能把只在聊天里记过 token 当成已持久化。没有原 token 时注明无法核对，租约到期后正常领取并核实 completion/步骤，不强抢或改数据库。普通问候直接用当前 token muse reply，不加不必要的 checkpoint，也不先 ack 或先在 Muse 主聊天宣告完成。真实工具才记录步骤，长任务按期续租。结果准备好立即回传；遇到拒绝要在 Muse 主聊天明确报告具体原因和原 event/request 标识，不能静默等待下次 hook。
+
+验收报告将“已领取后回复被拒绝、未确认事件等待租约到期”列为实际失败；首次 stale_lease 的原因缺少原 token/失败时状态时写“待查”，不要写成已证实服务重启错乱。精确 rc.2 本地独立进程两种重启顺序均可正常回传，不能用本地通过否定实际失败，也不能用时间先后替代因果证据。

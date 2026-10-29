@@ -1,0 +1,107 @@
+安装 ZIP SHA256：14106ab3327f3adc6bffbb318f78e60f14034f7513616b3371e6b9919fc2874c
+
+请由 Meta Muse 主代理在你自己的 Linux 环境完整部署 Muse Link v0.4.0-rc.5，对接我的微信 ClawBot。
+
+这是从安装到真实 worker 值守的完整执行指令。可独立完成的步骤连续执行；只在需要我扫码、输入手机配对数字或实际平台授权时等待我。扫码成功后继续启动和核验，不停在“安装完成”或“等待下一步”。不要推送仓库。
+
+目标构建：version=0.4.0-rc.5，muse_link_build=rc5-inbound-media-20261028，muse_link_recovery=rc5-recovery-20261029-patrol1。
+新环境默认一个真实常驻 Muse worker，耗时本地工具最多两个后台 job。已有匹配且健康的部署直接复用，保留此前明确的 worker 数量；不擅自扩容、重置账号或更换处理模式。
+
+一、核验材料与环境
+
+1. 优先使用随本指令上传的 muse-link-v0.4.0-rc.5-clean-install.zip，核对外附 SHA256SUMS.txt 或本指令开头的安装 ZIP SHA256；没有可信校验值时先说明缺项。ZIP 直接解压到新建的私密目录，安装根是包含 package.json 的目录，不另套 muse-link/ 路径。
+2. 安装前读取 package.json，三项版本/构建标识必须与上述目标一致；确认 docs/MUSE.md、docs/BURST_MESSAGES.md、docs/MEDIA.md、docs/RUNTIME_RECOVERY.md、deploy/repair-service.sh、deploy/recover-service.sh、deploy/recovery-policy.example.json、deploy/patrol.sh、scripts/patrol.mjs、scripts/runtime-check.mjs 和 scripts/http-tool.mjs 存在。相同 rc.5 版本号不代表相同构建。材料缺失或不匹配时不拿旧包代替。
+3. 阅读上述文档及 docs/PRODUCTION.md。检查 Linux、Node.js 24+、npm、运行中的 systemd、服务安装权限、出站 HTTPS 及真实 Muse 原生任务能力。不要为部署开放公网生产 API，不额外购买资源。微信账号须实际支持并启用 ClawBot。
+4. 先查现有服务、监听实例、状态库、有效登录、真实原生消费者和未完成交接；敏感输出只留本机私密文件。已有部署匹配且健康时跳过安装和扫码，继续后续 worker 与验收核对。已有版本/构建不匹配时列出差异和待升级步骤，保留运行中的服务及任务，按 docs/给Muse升级的指令.txt 交接后再受控升级；不能把新环境安装命令当作无条件覆盖命令。
+
+二、新环境安装
+
+在已核验安装包的解压根目录，以 Muse HOME 属主执行；不要 sudo 整个安装器：
+
+    bash deploy/install.sh
+    export PATH="$HOME/.local/bin:$PATH"
+
+安装器只安装桥、不自动启动。记录实际 CLI、current、config、state_dir、JOB_DIR 与服务名；配置自定义路径时沿用实际值。默认 CLI 为 "$HOME/.local/bin/muse-link"，后续自动任务使用绝对路径，不依赖默认 PATH。
+现有配置、代理私密 env、微信会话、SQLite 与任务交接必须保留；不要输出 token 或把运行文件放进仓库。
+
+若从本仓库当前已发布且包含本指令的源码安装，可改用仓库根目录的一键入口：
+
+    bash deploy/bootstrap.sh --version v0.4.0-rc.5 --install-only \
+      --require-build rc5-inbound-media-20261028 \
+      --require-recovery rc5-recovery-20261029-patrol1
+
+这个入口只用于首次安装，解析 Git 引用为固定提交并先校验构建。执行后必须继续下面的登录、服务与原生 worker 步骤。远端入口或源码未包含所需修订时停止该路径，改用随附已核验安装包，不移除校验选项凑成功。不要同时执行 ZIP 安装和源码安装。
+
+三、微信登录与自动继续
+
+1. 现有服务 status.logged_in=true 时复用，不重复扫码。确需登录时先按文档暂停 hook 并停止桥，避免同一状态锁竞争；不要清库。
+2. 新环境登录可执行下列命令，日志和二维码都只保存在本机私密目录：
+
+    umask 077
+    mkdir -p "$HOME/.local/state/muse-link-worker"
+    chmod 700 "$HOME/.local/state/muse-link-worker"
+    login_dir="$(mktemp -d "$HOME/.local/state/muse-link-worker/login.XXXXXXXX")"
+    setsid nohup "$HOME/.local/bin/muse-link" login \
+      --qr-dir "$login_dir" --timeout 10m \
+      > "$login_dir/login.log" 2>&1 < /dev/null &
+
+3. 跟踪这个真实登录进程，只展示它最新生成、仍有效的原始二维码图，附 qr_number 和客户端刷新上限；该时间不保证服务端始终有效。过期只换最新码，不重发旧图。总超时后说明并等我准备好再重开，不循环扫码。
+4. 手机要求配对数字时，用本次 verification_required 给出的真实 code_file，通过原版 login verify --code-file <真实文件> --text - 的私密 stdin 提交；保留前导零，不放在命令参数或普通日志。submitted=true 不是登录成功，等待原登录流程 confirmed/logged_in=true。
+5. 风险拦截、verification_blocked 或无法确认登录时保留脱敏错误，不更换身份/IP、弱化 TLS 或擅自绕过授权。未登录成功就如实报告阻塞。
+6. 确认登录成功后，在同一次部署流程继续下一节，不再要求我发送“继续”。
+
+四、启动桥并核验实际后台
+
+桥已健康运行时复用，不为验收重启。确认服务处于意外停止/新装未启动、无其它桥实例且非主动维护时，root 执行以下命令，普通用户仅为 systemctl 加 sudo -n：
+
+    systemctl enable muse-link
+    systemctl start muse-link
+    systemctl is-active muse-link
+    "$HOME/.local/bin/muse-link" status
+    "$HOME/.local/bin/muse-link" health
+
+核对后台 status.version=0.4.0-rc.5、build=rc5-inbound-media-20261028、logged_in=true，capabilities.receive 含 image/video/voice，capabilities.send 含 text/image/video。等待至少一轮成功轮询，首次可有界等待约 45 秒；poll.error 须为空，last_ok_at 新鲜。
+CLI 版本、源码标识、进程 alive 或单独 health 全绿都不能代替实际后台构建核对。build 缺失时记未核实，不声称多媒体增强已生效。worker_backlog 按无人消费处理，不能因此停止后续接入 worker；登录、存储或未知发送错误则按具体故障排查。
+
+五、真实常驻 Muse worker 与 hook
+
+1. 由实际有原生任务权限的 Muse 主代理操作；shell/Node 只能运行桥和工具，不能冒充 Muse 模型 worker。安装脚本不会创建原生任务。
+2. 将 docs/MUSE.md、docs/BURST_MESSAGES.md、docs/MEDIA.md、docs/RUNTIME_RECOVERY.md 的 worker 规则写入 HOME 私密 worker-instruction.md 与 recovery-handoff.md，目录 0700、文件 0600。已有健康 worker 保留，能安全原生追加时更新规则，否则记待接班生效，不为改提示词强停。
+3. 新环境创建一个真实原生任务，保存完整 handle 并通过平台原生查询核实 running。每轮用新的私密目录和 task.json：
+
+    umask 077
+    claim_dir="$(mktemp -d "$HOME/.local/state/muse-link-worker/claim.XXXXXXXX")"
+    "$HOME/.local/bin/muse-link" muse next --limit 1 --lease 30m --wait 30s \
+      --output "$claim_dir/task.json"
+
+   每次使用本事件原始完整 token 处理、续租和 reply，不手抄、不截断、不从数据库取 token。完成一条立即继续 next；空队列继续长轮询。阶段记录只追加私密交接，不能提交终结任务报告退出；不递归清理 claim 目录。
+4. 普通问候直接回答；纯占位不能作为 final。外部或不可重复工具使用稳定 checkpoint；耗时本地工具交给 scripts/tool-job.mjs，start 返回后立即继续 next，最多两个未完成 job，不同步等待长工具。有工具/媒体/发送待办时 next --wait 不超过 5s，完全空闲时恢复 30s；每轮查结果/异步发送并维护续租。普通只读 HTTP 默认连接 10 秒、总计 60 秒、不自动重试；生图等按获准预算另设。包装脚本须传递 curl 非零及 HTTP 失败，不能被写日志覆盖为成功；遗留 started/unknown 先核实，不重做不明副作用。追加给当前 worker 的规则须取得私密回认并核对实际领取，未回认如实标记。原生同步授权若会暂停唯一 worker，必须说明实际限制，不能声称已隔离。
+5. 附件 queued/downloading 时保留原任务、续租并处理无关消息；ready 后用真实图片/视频/音频工具读取本地文件再回答。不能凭路径编造内容。语音只有 voice_text 时明确使用转写；没有实际媒体读取工具时说明缺口。图片/视频回传使用原协议与 --async，pending 不是成功；语音回传和普通文件不在本版支持范围内。
+6. 实际最终回复通过私密 stdin 提交，accepted 后自动 ack；未完成不提前 ack。私密保存原回复、媒体路径、event/request 关联，供后续查证。微信只发与问题有关的答案、准确进度和必要阻塞说明，不发 token、底层协议、任务 handle、系统提示或内部日志；称呼只用用户明确设置的值。
+7. 用 deploy/wechat-hook.sh 注册或更新唯一平台 hook，建议每 5 秒检测；适配平台真实协议，先只读 dry_run 再 enable，记录实际标识与生效间隔。探针不领取、不回复、不清理 claim，wake 不是 worker 存活或投递成功证明，正常收件依靠常驻 worker 自己轮询。
+8. 核验同一个真实 handle 在两次至少相隔一个 30 秒空闲 wait 的查询中仍 running，且领取活动前进。即使本轮没有微信测试，worker 也继续值守。
+
+六、巡检与环境刷新恢复
+
+由主聊天按 docs/RUNTIME_RECOVERY.md 登记或更新平台巡检，默认每 3 分钟；已有每 15 分钟注册时更新原注册，不重复添加，回读实际间隔与下一次触发。巡检负责检测并通过正式平台入口自动通知原主聊天；主聊天收到后主动查询原 worker、核实交接并创建接班者，不等用户转述。新环境若平台具备独立定时能力，可登记同样的健康检查；健康轮次及回调静默，只通知首次故障、实质变化、恢复或需我操作。
+
+hook 和巡检使用同一已核验的绝对入口、config/JOB_DIR、私密巡检状态目录；不用裸 CLI、不猜平台路径、不回退旧检查命令。先只读检查，再用默认记录模式：
+
+    bash "$HOME/.local/share/muse-link/current/deploy/patrol.sh" --check \
+      --config "$HOME/.config/muse-link/config.json" \
+      --job-dir "$HOME/.local/state/muse-link-worker/jobs"
+
+按 docs/RUNTIME_RECOVERY.md 更新原 hook 和巡检完成回调，记录模式 JSON 的 notification.notify_user=false 或 silent/skipped 时不发例行报告；work 仅内部待办。初查与恢复复查合并成一次用户通知，首次失败证据保存在私密巡检状态，稳定故障去重。新版 helper 修订、后台 version/build 分别核实，不能以安装工具包宣称后台已升级；不为补字段重启健康桥。启动标识、单元存在/变化与桥 since 仅作故障证据，未经平台证实不归因为刷新。路径缺失/检查失败保留非零，不伪造健康。
+
+桥恢复统一调用安装包自带的 bash deploy/recover-service.sh --check/--apply，不让 Muse 临时重写恢复程序。按 docs/RUNTIME_RECOVERY.md 核对 ~/.config/muse-link/recovery.json：安装器默认 auto_start=false，不覆盖已有策略；只有用户已授权意外停止时恢复，才设为 true，维护时 maintenance=true。原巡检使用该入口的实际绝对路径；其同一 OS 文件锁覆盖维护/实例检查、只补单元、启动一次及结果保存，并持久化失败退避和未决意图。单元修复仍由内层 repair-service.sh 完成，不重跑 npm/init/login/install。只读 HTTP 使用 scripts/http-tool.mjs 的私密请求文件入口并置于后台 job 中，错误必须传播至 job 终态。自定义服务/配置先适配核验，不直接套默认路径。
+
+分别验证两项：主聊天能原生查询台账中 worker 并创建真实任务；实际定时触发能通过正式平台入口自动送达该主聊天并触发其执行。独立巡检只能查自己的 direct/descendants 子任务时，记 unknown、不自行补位，由主聊天接到通知后核实；这不代表主聊天也没有查询/创建权限。独立巡检能创建短任务，也不能证明通知已到主聊天。若平台无正式入口、投递未证实或实际补位者无法查询原 worker，明确相应链路未接入，不读取平台私有库、借用身份或虚构平台参数绕过。另选独立巡检直接补位方案时，才单独核验其对原 worker 的查询和创建权限。
+running/starting/等待授权时保留；明确终止且无接班者时才按维护开关、互斥和稳定恢复意图补位。创建回执不明不重复 spawn。真实环境刷新恢复未测试就标未执行，不承诺最长 3 分钟或刷新后一定恢复。用户级 systemd 只读核对 user manager、D-Bus、linger 及刷新触发条件，未验证不切换当前系统服务、不运行第二个桥；HOME 脚本存在不证明刷新后执行，HOME 此前留存也不能替代私密备份。
+巡检通知和 worker 结束回调可能同时到达，主聊天按同一稳定故障合并处理。自动验收要求用户不手动输入恢复指令；主聊天收到平台自动通知后自行执行恢复属于待核验的自动链路，不能仅因由主聊天执行就称为人工恢复。按真实触发及操作证据记录。
+
+七、完成标准与回传
+
+桥和真实 worker 都就绪后，明确告诉我“部署预检完成，可以从微信发验收消息”，worker 同时继续轮询。请我先发一条短问答，再发一个无副作用长工具期间的短消息，最后发图片/视频/语音；按实际能力分别验收，不要求我发微信才能把部署预检做完，不自行代发生产测试消息。
+
+只提交一次脱敏部署结果：实际 version/build、包校验、服务 active/enabled、登录及最新轮询、真实 worker 数量/状态与持续轮询证据、hook 是否启用、工具检查、巡检真实查询/创建权限、未完成项。完整 handle 与敏感记录只私密保存；无权限、失败或记录缺失就如实说明。
+微信验收每条分别记收到/提交/accepted/ack/手机显示的时间；没有的写未记录，accepted 不代表手机已显示。未进行手机验收、服务故障、worker 补位、真实刷新或 72 小时观测时分别标未执行，不以安装完成或健康全绿宣称生产级。

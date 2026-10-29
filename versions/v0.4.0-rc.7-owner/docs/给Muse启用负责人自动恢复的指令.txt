@@ -1,0 +1,21 @@
+项目：https://github.com/xianjia95-oss/muse-wechat-clawbot
+
+请使用本次上传的本地候选包，接入“一个固定对话负责人＋后台有限并行”的独立自动监控。未经用户验证不提交、不推送、不发布；Github已有同版本号包不能当成本地候选。不要停掉当前健康负责人来等待hook救援。
+
+先读docs/CONVERSATION_OWNER.md和docs/OWNER_WATCHDOG.md，核对CLI含muse session probe、后台支持只读probe接口；首次切换按原指令交接备份，不重扫、不清库、不抄SQLite token、不清有效租约。未升级后台不可只复制提示词冒充已接入。
+
+最先核实真实平台入口：本地程序是否能通过CLI、SDK或API查询原生任务并按固定slot创建/接续具备对话工具权限的任务？只回传接口名称及脱敏格式。只有主聊天的subagent工具不是本地入口；没有可调用接口时，adapter_script保留null、recovery_enabled保留false，如实记“监控实现已提供，Muse自动拉起未接入”。不要拿shell/Node后台进程、hook wake、cron通知或模型承诺冒充真正Muse任务。
+
+如果核实只有聊天内subagent工具，采用平台主级定时巡检路径：先用实际平台定时任务工具创建一次只读验权运行，真实调用subagent.list并确认可见现任负责人；不要先停健康负责人。验权成功且能保证巡检不重叠时，建立每分钟主级巡检，每次直接check原session/读取新鲜状态、查询真实原生handle；明确退出且没有替代者才在该次对话里调用subagent.spawn。不要创建Linux cron只执行shell，也不重新依赖hook唤醒后再人工派发。定时运行若没有主级工具/看不到旧handle，立即记“定时恢复未接入”，不能声称已启用。
+
+此路径先私密记录原handle、恢复意图和固定关联标识，再spawn并保存实际返回的新handle；原始交接只给新负责人。创建结果未知先用原生查询核对同一意图，不能多建；无可靠互斥或无法排除之前创建时停止新spawn，保留核对。running、starting和等待授权不替换；会话到期或积压不当成死亡证据。本地adapter仍为null，不伪造CLI入口。记录真实平台注册ID、验权调用、计划/实际触发时刻、接续handle和手机结果。平台刷新后定时注册是否保留、无人进主聊天能否恢复分别验证。每分钟是计划周期，没有固定恢复SLA。无需再次向用户询问是否创建这项已授权监控，但不得扩大到外部API或生图操作。
+
+有真实入口时，在0700私密目录实现owner-adapter.mjs，严格按OWNER_WATCHDOG的inspect/ensure契约：现有负责人真实handle注册到同一固定slot；完整列出该slot并显式查询tracked_handle；未知/无权限不能当作无人运行。ensure在同一原子或互斥流程复查旧任务已终止和slot唯一归属，持久化recovery_id去重，结果未知先查原请求，不能换ID重试。平台不能安全实现幂等和未知创建核对就不启用自动恢复。不要发明未提供的平台API。
+
+恢复任务用原session文件renew、读原claims和上下文及任务台账，继续原负责人循环，不session start、不扩白名单、不重新提交外部API/生图。原始task token还有效就正常renew；原文件丢失按租约到期后正常领取处理。started/unknown外部动作先查真实结果，已accepted最终回复不重发。负责人不直接同步等待长工具或触发会暂停自身的域名授权。
+
+将deploy/owner-watchdog.example.json复制为私密配置，替换实际绝对路径；文件0600、目录0700，单独state_dir。先check（永不ensure），验证真实running/授权等待/unknown均不建新任务，监控probe不续会话。隔离测试真实适配后才配置adapter_script和recovery_enabled=true。默认15秒一次、连续3次平台确认退出、固定ID持久化、30秒起退避、15分钟最多3次。不要为“更快”去掉这些保护。
+
+可用systemd时，按实际HOME/用户/Node替换deploy/muse-link-owner-watchdog.service.in的占位字段，按原桥服务同一权限安装为独立服务并启用；正常维护先systemctl stop muse-link-owner-watchdog.service。模板没有自行创建Muse的权限。环境整体刷新若会清空systemd注册，必须另接真实平台刷新后启动入口；没有则记“刷新后自动恢复未接入”，不能把文件还在当作自动运行。
+
+验收在无副作用窗口进行，主聊天不人工救援：1）当前负责人运行或已有授权等待不重复创建；2）受控结束负责人后独立监控恢复真实新handle；3）原已领取测试事件使用原session/task文件接续，微信得到实质回复且无重复；4）启动回执丢失仍只创建一份，监控自身重启沿用原recovery_id；5）仅微信发新消息确认自动消费，环境刷新启动另验。保存真实时间线和handle于私密本机，仅交脱敏结论及未接入项。模拟测试、accepted和手机显示分别记录，不混为通过。

@@ -1,0 +1,21 @@
+请在你（Meta Muse）自己的云端部署 Muse Link v0.4.0-rc.5，把你对接我的微信ClawBot。本版为单账号、单实例生产加固候选版，仍须真实验收。
+
+新环境完整部署或已有匹配环境核验，请先执行 docs/给Muse一键部署的指令.txt；该指令包含安装后继续登录、服务启动、真实常驻 worker 和巡检权限核验。下面保留协议与专项验收要求。
+
+本包是本地增强 build=rc5-inbound-media-20261028，未推送仓库；使用随附已核验安装包，不从 GitHub 旧包代替。先执行 docs/给Muse启用入站多媒体的指令.txt，并更新实际常驻 worker 的附件读取规则。保留已有调度配置。
+
+先读README.md、docs/MUSE.md、docs/PRODUCTION.md。已有Muse Link按docs/给Muse升级的指令.txt操作，保留配置/账号/状态。新安装确认Node.js24+、systemd、持久化本地磁盘、网络代理和真实Muse hooks权限，以Muse HOME属主执行bash deploy/install.sh，不sudo整个安装器，不运行两套微信接收进程。
+
+接入流程和协议细节见docs/REFERENCE.md。需要扫码时按MUSE.md运行独立login，立即展示每条新qr的原图，写明编号和客户端刷新时间；verification_required时按实际手机数字和最新code_file从stdin提交，不放进参数或日志。submitted不等于登录成功，等logged_in=true后再启动服务。微信账号是否支持ClawBot由实际情况决定。
+
+启动后status.version须为0.4.0-rc.5、health至少一次轮询成功。用真实Muse原生hooks注册，采用docs/MUSE.md完整worker指令，记录实际标识/状态/检测间隔，先dry_run再启用，dry_run不领取任务。必须有常驻连接进程和具备工具权限的真实Muse worker，不能只安装接收服务或假称hook注册成功。
+
+任务领取后保存event_id、lease_token、lease_until，检查execution和completion。每次回复/ack/renew/checkpoint带当前token，长任务续租，外部工具前后记录稳定步骤；遗留started先核对，completed cached复用结果，不重复执行。结果准备好立即muse reply回微信，不等下一轮hook。生成文件先完整导出到允许的持久化media_roots，再在同一最终回复加--image/--video；支持图片20MiB、视频50MiB，最多4个，不转码。最终成功自动ack，进度用稳定reply-id。入站图片/视频/原始语音按media状态与muse media查询交接，ready后用真实媒体工具打开；queued/downloading保留并继续处理无关短消息，不能提前final或假称读取。普通文件、语音回传不支持。
+
+unknown/rejected先核对，不换ID重发；failed可安全续传时使用原文字和路径，不能重做整项生成。恢复备份默认暂停，需要核对外部结果后批准。完整限流、保留期限、监控和备份回滚以PRODUCTION.md为准。
+
+最后按docs/给Muse一键部署的指令.txt执行真实手机、工具、故障恢复、备份/回滚及实际72小时观测，交付逐项通过/失败/未执行记录。接口accepted或本地模拟不能代替手机收取/播放，不能承诺固定网络速度；不要公开token、验证码、session或私密备份。
+
+连续消息与长工具须同时按 docs/BURST_MESSAGES.md 更新实际 worker/hook，使用私密后台工具结果和真实队列排空循环，核实取消额外的 90 秒消息去重；不能只升级后台。验收增加“110 秒后台无副作用等待期间连续 5 条短消息均收到回复”，逐条保存提交/accepted/手机时间。
+
+rc.5 媒体 reply 加 --async，先保存原正文/路径/稳定 request_id，收到 pending 后继续接待短消息，每轮查原回执并续租；全部 accepted 后自动 ack，再结清工具通知。unknown/rejected 不重发。工具监督器意外消失时按 BURST_MESSAGES.md 做 reviewed reconcile，活跃进程组会拒绝，interrupted 不表示业务成功；不删除原 ID 或锁。

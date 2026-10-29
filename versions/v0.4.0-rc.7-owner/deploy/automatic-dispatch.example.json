@@ -1,0 +1,11 @@
+{
+  "bridge_config": "/home/muse/.config/muse-link/config.json",
+  "session_file": "/home/muse/.local/state/muse-link-automatic/session.json",
+  "pool_dir": "/home/muse/.local/state/muse-link-automatic/executors",
+  "state_dir": "/home/muse/.local/state/muse-link-automatic/dispatch",
+  "reply_policy": "rules_only",
+  "fast_greetings": true,
+  "max_pending": 16,
+  "poll_ms": 250,
+  "max_hold_ms": 1800000
+}

@@ -1,0 +1,26 @@
+[Unit]
+Description=Muse Link automatic text dispatch and reply
+After=muse-link.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=__USER__
+Environment=HOME=__HOME__
+Environment=NODE_ENV=production
+EnvironmentFile=-__HOME__/.config/muse-link/env
+WorkingDirectory=__HOME__/.local/share/muse-link/current
+ExecStart=__NODE__ __HOME__/.local/share/muse-link/current/scripts/automatic-dispatch.mjs run --config __HOME__/.config/muse-link/automatic.json
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+KillMode=control-group
+MemoryMax=192M
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=default.target

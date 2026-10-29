@@ -1,0 +1,11 @@
+项目：https://github.com/xianjia95-oss/muse-wechat-clawbot
+
+请由Meta Muse主代理完整执行 docs/给Muse恢复常驻worker的指令.txt，再按 docs/NATIVE_PARALLEL.md、docs/AUTOMATIC_DISPATCH.md、docs/RUNTIME_RECOVERY.md 核对相关能力。当前方案是多个真实常驻worker各自直接next/reply并持续循环，不是每条消息等主代理spawn。子代理无需再次派生。
+
+专项要求：按入库/领取/开始/提交/accepted/手机时间定位延迟。用常驻池直接领取替代每条主级派发；只缩短wait或hook间隔不能解决无人消费。长任务期间其他slot自动回复，全池忙时仍排队，真实API不为验收重试。
+
+保留健康桥、登录、数据库及原事件所有者。先确认新消费者实际工作，再停旧职责，不停全池；已领取事件不重派，接管先确认旧执行者和工具停止、沿用原交接/完整token及正常renew。started/unknown先核对，不清租约、不抄数据库token。rc.5可切换，不无故升级、重启或扫码；新参数先核对实际CLI帮助。
+
+探针只读，不next或清claim。微信只发真实结果，实质阻塞用稳定progress，不占位、不提前ack。原生授权不可绕过，独立反馈未接入如实报告；外部API遵守次数与整段截止，暂停任务不因本指令获重试授权。
+
+验收分开记录：主聊天无人操作下两批持续消费、1分钟10条、90秒长任务期间短任务先回复、逐slot换班、全池冷启动与刷新恢复。人工救援不算自动通过，未测记未执行。真实标识/日志仅留私密报告，不放公开文档；用户验证前不推送、不发布。

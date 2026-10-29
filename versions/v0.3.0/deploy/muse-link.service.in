@@ -1,0 +1,24 @@
+[Unit]
+Description=Muse Link WeChat bridge
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=__USER__
+Environment=HOME=__HOME__
+Environment=NODE_ENV=production
+EnvironmentFile=-__HOME__/.config/muse-link/env
+WorkingDirectory=__HOME__/.local/share/muse-link
+ExecStart=__NODE__ __HOME__/.local/share/muse-link/src/cli.mjs run
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=25
+KillMode=control-group
+MemoryMax=512M
+UMask=0077
+
+[Install]
+WantedBy=default.target

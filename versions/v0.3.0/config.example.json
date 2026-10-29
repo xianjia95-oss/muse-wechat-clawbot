@@ -1,0 +1,11 @@
+{
+  "binding": "muse",
+  "state_dir": "~/.local/state/muse-link",
+  "listen": { "host": "127.0.0.1", "port": 18791 },
+  "api_token": "Run muse-link init to generate a private token",
+  "allow_wxids": [],
+  "send_timeout_ms": 12000,
+  "poll_timeout_ms": 45000,
+  "media_timeout_ms": 120000,
+  "media_roots": ["~/workspace"]
+}
